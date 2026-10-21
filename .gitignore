@@ -1,0 +1,42 @@
+# IDE
+.vscode
+.idea
+
+# cpp
+build
+install
+log
+
+#cland
+.cache
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Local build workspaces and external checkouts
+/nav_dog_ws/
+/unitree_slam/
+
+# Generated maps and map-editing sessions
+/*.pcd
+!/GlobalMap_clean_20261020_1920_nav_green_edited.pcd
+/map_edit_*/
+/*.png
+
+# Scratch measurements and one-off dumps
+/drift_baseline.txt
+/start_pose.txt
+/terrainAnalysis.yaml
+/*_apply.json
+
+# Editor and patch debris
+*.bak
+*.bak-*
+*.orig
+*.rej
+*.swp
+*~
+
+# Runtime logs
+*.log
