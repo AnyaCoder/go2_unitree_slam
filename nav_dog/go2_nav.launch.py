@@ -37,6 +37,7 @@ from launch_ros.actions import Node
 ODOM_TOPIC = '/lio_sam_ros2/mapping/re_location_odometry'
 CLOUD_TOPIC = '/lio_sam_ros2/mapping/cloud_registered'
 FILTERED_CLOUD_TOPIC = '/nav/cloud_registered_map'
+FAR_CONTOUR_PADDING_M = 0.12
 
 
 def _subst(text, args):
@@ -168,7 +169,10 @@ def generate_launch_description():
     far = Node(package='far_planner', executable='far_planner', name='far_planner',
                output='screen',
                condition=IfCondition(start_far),
-               parameters=[get_package_share_directory('far_planner') + '/config/default.yaml'],
+               parameters=[
+                   get_package_share_directory('far_planner') + '/config/default.yaml',
+                   {'c_detector/contour_padding_m': FAR_CONTOUR_PADDING_M},
+               ],
                remappings=[('/odom_world', ODOM_TOPIC),
                            ('/terrain_cloud', '/terrain_map_ext'),
                            ('/scan_cloud', '/terrain_map'),

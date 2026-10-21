@@ -28,6 +28,8 @@ def test_laptop_launch_keeps_only_global_planner_nodes():
     assert "'terrainAnalysisExt'" in launch
     assert "'far_planner'" in launch
     assert "('/way_point', '/far/way_point')" in launch
+    assert 'FAR_CONTOUR_PADDING_M = 0.12' in launch
+    assert "'c_detector/contour_padding_m': FAR_CONTOUR_PADDING_M" in launch
     check = read('nav/check_real_chain.sh')
     assert 'require_no_publisher /way_point' in check
     assert '/far/way_point' in check

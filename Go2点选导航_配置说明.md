@@ -25,7 +25,10 @@ localPlanner 和 pathFollower。本机额外设置 MID-360 安装偏移、真机
 狗端。这样上游参数变化会自动跟随，也不会在电脑上误启动
 `localPlanner/pathFollower`。
 
-狗端 `go2_nav.launch.py` 仍直接解析上游 launch XML，原样传递参数。狗端覆盖项：
+FAR 的障碍多边形安全边界统一设为
+`c_detector/contour_padding_m=0.12 m`，由电脑全局规划启动文件和狗端 FAR
+调试启动文件显式覆盖。狗端 `go2_nav.launch.py` 仍直接解析上游 launch XML，
+原样传递其余参数。狗端覆盖项：
 
 - `sensorOffsetX/Y`：MID-360 安装位置
 - `maxSpeed=0.5 m/s`：真机限速

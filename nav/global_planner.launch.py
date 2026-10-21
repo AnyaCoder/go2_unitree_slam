@@ -23,6 +23,7 @@ ALLOWED_EXECUTABLES = {
 
 # FAR's public waypoint is an implementation detail of whichever machine runs
 # FAR. Keep the laptop copy off /way_point; the Go2 receiver owns that topic.
+FAR_CONTOUR_PADDING_M = 0.12
 FAR_REMAPPINGS = [
     ('/odom_world', '/state_estimation'),
     ('/terrain_cloud', '/terrain_map_ext'),
@@ -68,9 +69,12 @@ def generate_launch_description():
         executable='far_planner',
         name='far_planner',
         output='screen',
-        parameters=[os.path.join(
-            get_package_share_directory('far_planner'),
-            'config', 'default.yaml')],
+        parameters=[
+            os.path.join(
+                get_package_share_directory('far_planner'),
+                'config', 'default.yaml'),
+            {'c_detector/contour_padding_m': FAR_CONTOUR_PADDING_M},
+        ],
         remappings=FAR_REMAPPINGS,
     ))
     return LaunchDescription(entities)
