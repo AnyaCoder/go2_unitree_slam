@@ -48,6 +48,7 @@ patterns=(
   '[U]nitreeSlam'
   '[r]os2 launch /home/unitree/go2_nav/go2_nav.launch.py'
   '[p]ython3 /home/unitree/go2_nav/'
+  '[n]av_safety_gate.py'
   '[r]os2 launch task navigation_without_nav2_qt_test.launch.py'
   '[r]os2 launch livox_ros_driver2'
   '[l]ivox_ros_driver2_node'
@@ -79,9 +80,9 @@ REMOTE
 
 echo
 echo '--- 电脑端残留（应为空）---'
-ps -eo pid,ppid,args | grep -E 'run_real_view|pcdMapSim|far_planner|localPlanner|pathFollower|terrainAnalysis|far_viz_receiver|waypoint_sender|initialpose_sender|map_sim.launch|/rviz2/rviz2' | grep -v grep || true
+ps -eo pid,ppid,args | grep -E 'run_real_view|pcdMapSim|far_planner|localPlanner|pathFollower|nav_safety_gate|terrainAnalysis|far_viz_receiver|waypoint_sender|initialpose_sender|map_sim.launch|/rviz2/rviz2' | grep -v grep || true
 
 echo '--- 狗端残留（应只剩 Unitree 底层，不应有本项目的导航/SLAM 节点）---'
 ssh -o ConnectTimeout=5 -o BatchMode=yes "$HOST" \
-  "ps -eo pid,ppid,args | grep -E '[U]nitreeSlam|[g]o2_nav.launch|[l]ocalPlanner|[p]athFollower|[t]errainAnalysis|[l]io_sam_ros2|[l]ivox_ros_driver2|[f]ar_viz_link|[f]ar_command_link|[i]nitialpose_link|[l]ive_robot_state.py ros|[d]og_control_B1_one|[g]o2_control_by_sdk.*send_cmd|[h]igh_rate_state' || true" \
+  "ps -eo pid,ppid,args | grep -E '[U]nitreeSlam|[g]o2_nav.launch|[l]ocalPlanner|[p]athFollower|[n]av_safety_gate|[t]errainAnalysis|[l]io_sam_ros2|[l]ivox_ros_driver2|[f]ar_viz_link|[f]ar_command_link|[i]nitialpose_link|[l]ive_robot_state.py ros|[d]og_control_B1_one|[g]o2_control_by_sdk.*send_cmd|[h]igh_rate_state' || true" \
   2>/dev/null || true

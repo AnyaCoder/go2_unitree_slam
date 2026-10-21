@@ -129,6 +129,75 @@ else
   done <<<"$extra_control"
 fi
 
+echo '== 狗端 Goalpoint 安全闸 =='
+dog_ros_domain="${GO2_DOG_ROS_DOMAIN_ID:-0}"
+dog_ros() {
+  local command="$1"
+  timeout 20 ssh -o ConnectTimeout=5 -o BatchMode=yes "$dog_host" \
+    "set +u; source /opt/ros/foxy/setup.bash; \
+     source /unitree/module/graph_pid_ws/install/local_setup.bash; \
+     source /home/unitree/autonomy_stack_go2/install/setup.bash; set -u; \
+     export ROS_DOMAIN_ID='${dog_ros_domain}'; export ROS_LOCALHOST_ONLY=0; \
+     export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp; \
+     export LD_LIBRARY_PATH=/usr/local/lib:\${LD_LIBRARY_PATH:-}; ${command}" \
+    2>/dev/null || true
+}
+
+gate_process="$(
+  timeout 18 ssh -o ConnectTimeout=5 -o BatchMode=yes "$dog_host" \
+    "ps -eo pid,args | grep '[n]av_safety_gate.py' || true" 2>/dev/null || true
+)"
+if [[ -n "$gate_process" ]]; then
+  pass "狗端安全闸进程存在：$gate_process"
+else
+  fail '狗端没有 nav_safety_gate.py；Goalpoint 无硬安全闸'
+fi
+
+api_info="$(dog_ros 'timeout 5 ros2 topic info /api/sport/request')"
+api_pub_count="$(awk '/Publisher count:/ {print $3}' <<<"$api_info")"
+if [[ "$api_pub_count" =~ ^[0-9]+$ ]] && (( api_pub_count == 1 )); then
+  pass '/api/sport/request 只有一个发布者（应为 nav_safety_gate）'
+else
+  fail "/api/sport/request 发布者数量必须恰好为 1，实际=${api_pub_count:-unknown}"
+fi
+
+internal_info="$(dog_ros 'timeout 5 ros2 topic info /nav/path_follower_request')"
+internal_pub_count="$(awk '/Publisher count:/ {print $3}' <<<"$internal_info")"
+if [[ "$internal_pub_count" =~ ^[0-9]+$ ]] && (( internal_pub_count >= 1 )); then
+  pass "/nav/path_follower_request publisher=$internal_pub_count（pathFollower 已被重映射）"
+else
+  fail 'pathFollower 没有发布到安全闸内部话题 /nav/path_follower_request'
+fi
+
+safety_yaml="$(
+  dog_ros 'timeout 6 ros2 topic echo /nav/safety_status std_msgs/msg/String \
+    --qos-reliability reliable --qos-durability transient_local'
+)"
+safety_json="$(
+  python3 -c 'import sys,yaml; docs=list(yaml.safe_load_all(sys.stdin)); print(docs[0].get("data", "") if docs and isinstance(docs[0], dict) else "")' \
+    <<<"$safety_yaml" 2>/dev/null || true
+)"
+if [[ -n "$safety_json" ]]; then
+  safety_verdict="$(
+    python3 -c 'import json,sys; d=json.load(sys.stdin); print("ready=%s motion=%s imu=%s pose=%s loc=%s reason=%s" % (str(d.get("goal_commands_ready")).lower(), str(d.get("motion_ready")).lower(), d.get("imu",{}).get("state"), bool(d.get("initial_pose")), bool(d.get("localization_confirmed")), (d.get("reasons") or ["NONE"])[0]))' \
+      <<<"$safety_json" 2>/dev/null || true
+  )"
+  safety_ready="$(python3 -c 'import json,sys; print(str(json.load(sys.stdin).get("goal_commands_ready")).lower())' <<<"$safety_json" 2>/dev/null || echo error)"
+  safety_motion="$(python3 -c 'import json,sys; print(str(json.load(sys.stdin).get("motion_ready")).lower())' <<<"$safety_json" 2>/dev/null || echo error)"
+  if [[ "$safety_ready" == "true" ]]; then
+    pass "Goalpoint 前置条件已满足：$safety_verdict"
+  else
+    fail "不得使用 Goalpoint：$safety_verdict"
+  fi
+  if [[ "$safety_motion" == "true" ]]; then
+    pass '当前 goal/waypoint/path 有效，安全闸允许运动'
+  else
+    warn '当前尚未形成允许运动的完整目标链；Goalpoint 不会被放行'
+  fi
+else
+  fail '读不到 /nav/safety_status；无法证明 IMU/初始位姿/定位门控有效'
+fi
+
 echo
 echo '== 人工可走区必须不存在 =='
 if pgrep -af '/map_sim/space_viz' >/dev/null; then

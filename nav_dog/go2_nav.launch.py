@@ -6,7 +6,7 @@ terrain_analysis_ext.launch）里的 <arg>/<param>/<remap>，原样传给节点�
 这里的数值就等于上游默认值（含 $(var ...) 展开），上游改了参数我们也自动跟随，
 不会出现"手抄一份参数"慢慢漂移的问题。
 
-相对上游 system_real_robot_with_route_planner.launch，本文件只做三件事：
+相对上游 system_real_robot_with_route_planner.launch，本文件只做五件事：
   1. 用 LIO-SAM 替换 Point-LIO：/state_estimation、/registered_scan 重映射到
      /lio_sam_ros2/mapping/{re_location_odometry,cloud_registered}；
      far_planner 的 /odom_world 直接接真实里程计，避免 ROS2 多级 remap 不串联
@@ -14,7 +14,9 @@ terrain_analysis_ext.launch）里的 <arg>/<param>/<remap>，原样传给节点�
      对应 L1 装在狗头前方 0.3 m；MID360 装在背上时要用实测值
   3. 先把 cloud_registered 从 odom 转到 map 并过滤狗体回波，再交给
      terrainAnalysis/localPlanner；TF 不可用时宁可丢帧也不转发错误坐标
-  4. 不启动任何控制桥；状态上行、waypoint 和初始位姿分别由
+  4. 把 pathFollower 写死的 /api/sport/request 输出强制重映射到
+     /nav/path_follower_request，并由 fail-closed 安全闸审查后再发给底盘
+  5. 不启动任何通用控制桥；状态上行、waypoint 和初始位姿分别由
      run_real_view.sh 管理的独立 Python 进程负责
 
 不启动（与上游一致或本机不需要）：joy_node（狗上没有 /dev/input/js0）、
@@ -114,6 +116,8 @@ def generate_launch_description():
     sport_out = LaunchConfiguration('sport_out')
     sensor_x = LaunchConfiguration('sensor_offset_x')
     sensor_y = LaunchConfiguration('sensor_offset_y')
+    sport_api_out = LaunchConfiguration('sport_api_out')
+    start_safety_gate = LaunchConfiguration('start_safety_gate')
     start_far = LaunchConfiguration('start_far')
     start_cloud_filter = LaunchConfiguration('start_cloud_filter')
     cloud_topic = LaunchConfiguration('cloud_topic')
@@ -137,6 +141,7 @@ def generate_launch_description():
 
     sensor_params = {'sensorOffsetX': sensor_x, 'sensorOffsetY': sensor_y}
     self_filter_script = os.path.join(os.path.dirname(__file__), 'self_filter.py')
+    safety_gate_script = os.path.join(os.path.dirname(__file__), 'nav_safety_gate.py')
     cloud_filter = ExecuteProcess(
         cmd=['python3', self_filter_script],
         name='go2_cloud_frame_self_filter', output='screen',
@@ -155,10 +160,26 @@ def generate_launch_description():
                    parameters=[planner_params, sensor_params],
                    remappings=lio_remaps(cloud_topic))
 
+    # The upstream pathFollower hard-codes /api/sport/request.  Always remap
+    # that publisher to an internal topic; the fail-closed gate is then the only
+    # publisher allowed to command the real Sport API.
+    follower_output_remap = ('/api/sport/request', sport_out)
+    follower_remaps = [follower_output_remap] + [
+        remap for remap in follower_remaps
+        if remap[0] != '/api/sport/request'
+    ]
     follower = Node(package='local_planner', executable='pathFollower',
                     name='pathFollower', output='screen',
                     parameters=[follower_params, sensor_params],
                     remappings=lio_remaps(cloud_topic, *follower_remaps))
+
+    safety_gate = ExecuteProcess(
+        cmd=['python3', safety_gate_script,
+             '--path-follower-topic', sport_out,
+             '--sport-api-topic', sport_api_out,
+             '--odom-topic', ODOM_TOPIC],
+        name='nav_safety_gate', output='screen',
+        condition=IfCondition(start_safety_gate))
 
     far = Node(package='far_planner', executable='far_planner', name='far_planner',
                output='screen',
@@ -170,8 +191,15 @@ def generate_launch_description():
                            ('/terrain_local_cloud', cloud_topic)])
 
     return LaunchDescription([
-        DeclareLaunchArgument('sport_out', default_value='/api/sport/request',
-                              description='运动指令话题；dry run 用 /nav/dry_cmd'),
+        DeclareLaunchArgument(
+            'sport_out', default_value='/nav/path_follower_request',
+            description='pathFollower 内部运动请求；不得直接设成 /api/sport/request'),
+        DeclareLaunchArgument(
+            'sport_api_out', default_value='/api/sport/request',
+            description='安全闸唯一允许发布到的 Go2 Sport API 话题'),
+        DeclareLaunchArgument(
+            'start_safety_gate', default_value='true',
+            description='IMU/初始位姿/定位/Goalpoint/path 安全闸；实机必须为 true'),
         DeclareLaunchArgument('sensor_offset_x', default_value='0.3',
                               description='上游默认 0.3（L1 在狗头前 0.3m）；MID360 装背上需实测'),
         DeclareLaunchArgument('sensor_offset_y', default_value='0.0'),
@@ -184,5 +212,5 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'start_far', default_value='false',
             description='电脑端已负责静态地图 FAR；狗端默认不重复启动 FAR'),
-        cloud_filter, terrain, terrain_ext, planner, follower, far,
+        cloud_filter, terrain, terrain_ext, planner, follower, safety_gate, far,
     ])
