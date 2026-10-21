@@ -11,6 +11,8 @@ laptop fixed PCD map
   -> /goal_point and /way_point over TCP 8899
   -> Go2 localPlanner
   -> Go2 pathFollower
+  -> /nav/path_follower_request
+  -> nav_safety_gate (IMU + initial pose + localization + fresh Goalpoint/path)
   -> /api/sport/request
 ```
 
@@ -59,8 +61,14 @@ cd ~/go2_unitree_slam
 ./nav/start_far_real.sh
 ```
 
-After RViz opens, use `2D Pose Estimate` once. Wait until the receiver logs show
-real SLAM odometry, TF and joint data. Then send a FAR goal point.
+After RViz opens, keep the dog completely still for about 3 seconds so the IMU
+health check can complete. Then use `2D Pose Estimate` once. Wait for the dog-side
+`Pose initialization successful` / `Initializing Succeed` message and for
+`/nav/safety_status` to report `goal_commands_ready=true`. Only then send a FAR
+goal point. Motion is additionally blocked until that localization epoch has a
+Goalpoint, a FAR waypoint and a local path. Goalpoints and waypoints do not
+expire while the same goal remains active; the planner path must still refresh
+at least once every 3 seconds.
 
 Stop only the processes owned by this project:
 
@@ -92,6 +100,7 @@ unitree_slam/        Local external checkout; ignored by Git
 - [Go2_Mid360_SLAM_操作手册.md](Go2_Mid360_SLAM_操作手册.md): mapping and operation guide
 - [Go2点选导航_配置说明.md](Go2点选导航_配置说明.md): point-to-point navigation setup
 - [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md): current safety and integration risks
+- [docs/导航安全门控与初始化流程_20261021.md](docs/导航安全门控与初始化流程_20261021.md): fail-closed Goalpoint gate and test evidence
 
 ## Safety Boundary
 
@@ -99,7 +108,15 @@ When FAR navigation is active, the only allowed motion-control chain is:
 
 ```text
 laptop FAR -> TCP 8899 -> Go2 localPlanner/pathFollower
+  -> /nav/path_follower_request -> nav_safety_gate -> /api/sport/request
 ```
+
+The gate starts disarmed and accepts only `StopMove`/`Move`. It requires stationary
+IMU calibration, a current-epoch initial pose, confirmed localization, fresh
+odometry, a FAR Goalpoint, a FAR waypoint and a local path generated for that
+goal. The initial-pose distance/yaw check is performed once while acquiring
+localization, not continuously during travel. A new initial pose invalidates all
+old goals and paths; a stale IMU/odometry/path causes an immediate stop.
 
 The legacy UnitreeSlam motion nodes
 `dog_control_B1_one` and `go2_control_by_sdk send_cmd` must not run at the same
