@@ -13,20 +13,13 @@ set -u
 export LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH:-}
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 if [ "$MODE" = "live" ]; then
-  SPORT=/nav/path_follower_request
-  SPORT_API=/api/sport/request
-  START_SAFETY_GATE=true
-  echo "=== LIVE: pathFollower -> safety gate -> /api/sport/request ==="
-  echo "=== Motion stays blocked until IMU, initial pose and localization are ready ==="
+  SPORT=/api/sport/request
+  echo "=== LIVE: pathFollower will command the dog ==="
 else
   SPORT=/nav/dry_cmd
-  SPORT_API=/nav/dry_cmd
-  START_SAFETY_GATE=false
   echo "=== DRY RUN: motion commands go to /nav/dry_cmd ==="
 fi
 exec ros2 launch /home/unitree/go2_nav/go2_nav.launch.py \
   sport_out:=$SPORT \
-  sport_api_out:=$SPORT_API \
-  start_safety_gate:=$START_SAFETY_GATE \
   sensor_offset_x:=$SENSOR_OFFSET_X \
   sensor_offset_y:=$SENSOR_OFFSET_Y

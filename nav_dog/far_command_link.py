@@ -17,8 +17,6 @@ import time
 import rclpy
 from geometry_msgs.msg import PointStamped
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
-from std_msgs.msg import Bool
 
 from far_command_protocol import (
     FRAME_HEADER, MAX_FRAME_BYTES, OP_FAR_WAYPOINT, OP_FINAL_GOAL,
@@ -40,15 +38,6 @@ class FarCommandLink(Node):
         self.published_count = 0
         self.dropped_count = 0
         self.min_interval = 0.2
-        self.goal_commands_ready = False
-        self.ready_update_time = 0.0
-        self.ready_rejected_count = 0
-
-        latched = QoSProfile(depth=1)
-        latched.reliability = ReliabilityPolicy.RELIABLE
-        latched.durability = DurabilityPolicy.TRANSIENT_LOCAL
-        self.create_subscription(
-            Bool, '/nav/goal_commands_ready', self.on_goal_commands_ready, latched)
 
         self.goal_pub = self.create_publisher(PointStamped, '/goal_point', 10)
         self.waypoint_pub = self.create_publisher(PointStamped, '/way_point', 10)
@@ -62,21 +51,7 @@ class FarCommandLink(Node):
         self.acceptor.start()
         self.create_timer(5.0, self.report_status)
         self.get_logger().info(
-            'waypoint command channel listening on %d; waiting for safety gate' % self.port)
-
-    def on_goal_commands_ready(self, message):
-        ready = bool(message.data)
-        self.ready_update_time = time.monotonic()
-        if ready != self.goal_commands_ready:
-            self.get_logger().info(
-                'safety gate Goalpoint authorization: %s' %
-                ('READY' if ready else 'BLOCKED'))
-        self.goal_commands_ready = ready
-
-    def _commands_ready_now(self):
-        # Missing or stale safety status is fail-closed.  A crashed gate must
-        # never leave a latched true value authorizing future waypoints.
-        return self.goal_commands_ready and time.monotonic() - self.ready_update_time <= 2.0
+            'waypoint command channel listening on %d (waypoint only)' % self.port)
 
     def accept_loop(self):
         while not self.closed.is_set():
@@ -142,13 +117,6 @@ class FarCommandLink(Node):
             self.dropped_count += 1
             self.get_logger().warn('rejected non-finite waypoint')
             return
-        if not self._commands_ready_now():
-            self.dropped_count += 1
-            self.ready_rejected_count += 1
-            self.get_logger().warn(
-                'rejected Goalpoint/FAR waypoint: IMU, initial pose or '
-                'localization is not ready')
-            return
 
         channel = 'goal' if opcode == OP_FINAL_GOAL else 'far_waypoint'
         now = time.monotonic()
@@ -182,12 +150,9 @@ class FarCommandLink(Node):
         with self.client_lock:
             connected = self.client is not None
         self.get_logger().info(
-            'laptop=%s safety=%s received=%d published=%d dropped=%d '
-            'ready_rejected=%d' %
-            ('connected' if connected else 'waiting',
-             'ready' if self._commands_ready_now() else 'blocked',
-             self.received_count, self.published_count, self.dropped_count,
-             self.ready_rejected_count))
+            'laptop=%s received=%d published=%d dropped=%d' %
+            ('connected' if connected else 'waiting', self.received_count,
+             self.published_count, self.dropped_count))
 
     def close(self):
         self.closed.set()

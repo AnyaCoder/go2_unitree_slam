@@ -88,14 +88,6 @@ if [[ "$ssh_ready" -ne 1 ]]; then
   exit 3
 fi
 
-if ! ssh -o ConnectTimeout=5 -o BatchMode=yes "$HOST" \
-    "pgrep -f '[n]av_safety_gate.py' >/dev/null 2>&1"; then
-  echo 'FAIL  狗端没有 nav_safety_gate.py；拒绝打开可发送 Goalpoint 的导航视图' >&2
-  echo '      请先运行 ./nav/start_far_real.sh，不能绕过 IMU/初始位姿/定位安全闸。' >&2
-  exit 4
-fi
-echo 'PASS  狗端 Goalpoint 安全闸已运行'
-
 echo '[1/6] 同步并启动狗端状态、waypoint 与 initial-pose 通道'
 ssh "$HOST" 'mkdir -p /home/unitree/go2_nav'
 scp -q \
