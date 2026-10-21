@@ -49,6 +49,7 @@
 # Keep exactly one canonical navigation map in version control.
 /*.pcd
 !/GlobalMap_clean_20261020_1920_nav_green_edited.pcd
+/*.sha256
 /map_edit_*/
 /*.png
 /*.ply
