@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Wire definition for Go2 state telemetry and the minimal obstacle cloud."""
+"""Wire definition for Go2 state, planner output and the minimal cloud."""
 
 import struct
 from collections import namedtuple
 
 import numpy as np
-from nav_msgs.msg import Odometry
+from nav_msgs.msg import Odometry, Path
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import JointState
 from tf2_msgs.msg import TFMessage
@@ -25,13 +25,16 @@ CLOUD_POINT_BYTES = 6
 TopicSpec = namedtuple('TopicSpec', 'remote_topic local_topic msg_type hz sensor')
 
 
-# Large static terrain stays on the laptop. These are state-only robot topics.
+# The laptop runs FAR locally on the fixed map. Only Go2 state and the local
+# execution path cross the uplink. FAR markers and /way_point stay local to
+# their owning machines, avoiding duplicate publishers.
 TOPICS = (
     TopicSpec('/lio_sam_ros2/mapping/re_location_odometry', '/state_estimation',
               Odometry, 30.0, False),
     TopicSpec('/tf', '/tf', TFMessage, 20.0, False),
     TopicSpec('/tf_static', '/tf_static', TFMessage, 2.0, False),
     TopicSpec('/joint_states', '/joint_states', JointState, 30.0, False),
+    TopicSpec('/path', '/path', Path, 5.0, False),
 )
 
 

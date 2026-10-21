@@ -3,9 +3,11 @@
 # command bridges, and no artificial walkable-area layer.
 set -euo pipefail
 
-ROOT="${HOME}/go2_unitree_slam"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DOMAIN_ID="${GO2_LOCAL_MAP_DOMAIN_ID:-97}"
 WS="${WS:-${HOME}/autonomy_stack_go2}"
+# shellcheck source=../nav_dog/go2_mid360_hardware.env
+source "${ROOT}/nav_dog/go2_mid360_hardware.env"
 LOG_DIR="${LOG_DIR:-/tmp}"
 MAP="${MAP:-${ROOT}/GlobalMap_clean_20261020_1920_nav_green_edited.pcd}"
 LAUNCH_LOG="${LOG_DIR}/go2_map_sim_project.log"
@@ -24,14 +26,16 @@ terminate_matching() {
 
 # Stop only the previous local simulation/view stack.
 terminate_matching 'python3 .*/nav/far_viz_receiver\.py'
+terminate_matching 'python3 .*/nav/global_path_sender\.py'
 terminate_matching 'python3 .*/nav/waypoint_sender\.py'
 terminate_matching 'python3 .*/nav/initialpose_sender\.py'
+terminate_matching '^/usr/bin/python3 /opt/ros/foxy/bin/ros2 launch .*/nav/global_planner\.launch\.py'
 terminate_matching '^/usr/bin/python3 /opt/ros/foxy/bin/ros2 launch map_sim map_sim\.launch\.py'
-terminate_matching '/home/anyacoder/autonomy_stack_go2/install/map_sim/lib/map_sim/(pcd_map_sim|space_viz)'
-terminate_matching '^/home/anyacoder/autonomy_stack_go2/install/terrain_analysis/lib/terrain_analysis/'
-terminate_matching '^/home/anyacoder/autonomy_stack_go2/install/terrain_analysis_ext/lib/terrain_analysis_ext/'
-terminate_matching '^/home/anyacoder/autonomy_stack_go2/install/local_planner/lib/local_planner/'
-terminate_matching '^/home/anyacoder/autonomy_stack_go2/install/far_planner/lib/far_planner/'
+terminate_matching '/autonomy_stack_go2/install/map_sim/lib/map_sim/(pcd_map_sim|space_viz)'
+terminate_matching '^/autonomy_stack_go2/install/terrain_analysis/lib/terrain_analysis/'
+terminate_matching '^/autonomy_stack_go2/install/terrain_analysis_ext/lib/terrain_analysis_ext/'
+terminate_matching '^/autonomy_stack_go2/install/local_planner/lib/local_planner/'
+terminate_matching '^/autonomy_stack_go2/install/far_planner/lib/far_planner/'
 terminate_matching '/rviz2/rviz2 .*\.rviz'
 terminate_matching '^/opt/ros/foxy/lib/robot_state_publisher/robot_state_publisher'
 terminate_matching '^/opt/ros/foxy/lib/tf2_ros/static_transform_publisher'
@@ -62,6 +66,7 @@ trap cleanup EXIT INT TERM
 echo '[1/2] 启动固定静态地图模拟'
 ros2 launch map_sim map_sim.launch.py \
   pcd:="$MAP" \
+  max_speed:="$GO2_MAX_SPEED" \
   rviz:=false \
   robot_state_publisher:=true \
   space_viz:=false \

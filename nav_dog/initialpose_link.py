@@ -11,7 +11,7 @@ import time
 import numpy as np
 import rclpy
 from geometry_msgs.msg import PoseWithCovarianceStamped
-from rcl_interfaces.msg import Log
+from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from std_msgs.msg import String
 from unitree_interfaces.msg import QtCommand
@@ -37,13 +37,17 @@ class InitialPoseLink(Node):
         self.pending_timer = None
         self.pending_pose = None
         self.relocation_waiting = False
+        self.odometry_ready = threading.Event()
+        self.pose_generation = 0
         self.command_index = 9000
 
         self.command_publisher = self.create_publisher(
             QtCommand, '/qt_command', 10)
         self.publisher = self.create_publisher(
             PoseWithCovarianceStamped, '/initialpose', 10)
-        self.create_subscription(Log, '/rosout', self.rosout_callback, 50)
+        self.create_subscription(
+            Odometry, '/lio_sam_ros2/mapping/re_location_odometry',
+            self.odom_callback, 10)
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.server.bind(('0.0.0.0', self.port))
@@ -127,28 +131,39 @@ class InitialPoseLink(Node):
             self.dropped_count += 1
             return
         self.last_accept_time = now
-        relocation_running = any(
-            name.lstrip('/') == 'lio_sam_ros2_globalLocalize'
-            for name in self.get_node_names())
-        if relocation_running:
+        relocation_running = self.global_localize_running()
+        if relocation_running and self.odometry_ready.is_set():
             self.get_logger().info(
-                'relocation node already running; applying pose directly')
+                'relocation already localized; applying pose directly')
             self.schedule_pose(x, y, yaw, 0.2)
             return
 
         self.pending_pose = (x, y, yaw)
-        if not self.relocation_waiting:
+        if not relocation_running and not self.relocation_waiting:
             self.relocation_waiting = True
+            self.odometry_ready.clear()
             self.start_relocation()
             self.get_logger().info(
-                'relocation started; waiting for globalLocalize map initialization')
+                'relocation started; waiting for globalLocalize node')
+        elif relocation_running:
+            self.get_logger().info(
+                'globalLocalize already running; retrying pose until odometry appears')
         else:
             self.get_logger().info(
                 'relocation already starting; updated pending initial pose')
-        # This is only a fail-safe. The normal path is triggered by the
-        # globalLocalize readiness log below; first-map loading routinely takes
-        # longer than five seconds on Go2.
-        self.schedule_pose(x, y, yaw, 60.0)
+
+        self.start_pose_watcher(x, y, yaw)
+
+    def global_localize_running(self):
+        return any(
+            name.lstrip('/') == 'lio_sam_ros2_globalLocalize'
+            for name in self.get_node_names())
+
+    def odom_callback(self, _message):
+        if not self.odometry_ready.is_set():
+            self.odometry_ready.set()
+            self.get_logger().info(
+                'relocation odometry received; initial pose is active')
 
     def schedule_pose(self, x, y, yaw, delay):
         if self.pending_timer is not None:
@@ -158,25 +173,55 @@ class InitialPoseLink(Node):
         self.pending_timer.daemon = True
         self.pending_timer.start()
 
-    def rosout_callback(self, message):
-        if not self.relocation_waiting or self.pending_pose is None:
+    def start_pose_watcher(self, x, y, yaw):
+        """Apply a cold-start pose once globalLocalize is ready.
+
+        The globalLocalize node can exist several seconds before its global map
+        finishes loading.  Waiting only on /rosout is fragile, so wait for the
+        node, allow the fixed map-load window, then retry until real relocation
+        odometry appears.
+        """
+        self.pose_generation += 1
+        generation = self.pose_generation
+        thread = threading.Thread(
+            target=self.pose_watch_loop,
+            args=(generation, x, y, yaw), daemon=True)
+        thread.start()
+
+    def pose_watch_loop(self, generation, x, y, yaw):
+        deadline = time.monotonic() + 30.0
+        while time.monotonic() < deadline:
+            if generation != self.pose_generation or self.closed.is_set():
+                return
+            if self.global_localize_running():
+                break
+            time.sleep(0.5)
+        else:
+            self.get_logger().error(
+                'globalLocalize node did not appear within 30 seconds')
             return
-        # Foxy often reports the actual source as ``rclcpp`` instead of the
-        # node name in Log.name.  The readiness message text is specific
-        # enough here; keep the node-name fast path for distros that provide it.
-        logger_is_global_localize = message.name.endswith(
-            'lio_sam_ros2_globalLocalize')
-        logger_is_rclcpp = message.name == 'rclcpp'
-        if not (logger_is_global_localize or logger_is_rclcpp):
+
+        if generation != self.pose_generation or self.closed.is_set():
             return
-        if 'Map Optimization Started' not in message.msg:
-            return
-        x, y, yaw = self.pending_pose
-        self.pending_pose = None
-        self.relocation_waiting = False
         self.get_logger().info(
-            'globalLocalize map ready; submitting pending initial pose')
-        self.schedule_pose(x, y, yaw, 0.2)
+            'globalLocalize node ready; waiting for global map load')
+        if self.odometry_ready.wait(6.5):
+            return
+
+        for attempt in range(1, 7):
+            if generation != self.pose_generation or self.closed.is_set():
+                return
+            if self.odometry_ready.is_set():
+                return
+            self.get_logger().info(
+                'submitting initial pose attempt %d/6' % attempt)
+            self.publish_initial_pose(x, y, yaw)
+            if self.odometry_ready.wait(5.0):
+                self.pending_pose = None
+                self.relocation_waiting = False
+                return
+        self.get_logger().error(
+            'relocation odometry did not appear after six initial-pose attempts')
 
     def start_relocation(self):
         self.command_index += 1

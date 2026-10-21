@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Go2 state/obstacle uplink: odom, TF, joints and an optional minimal cloud.
+# Go2 state/planner-output uplink: odom, TF, joints, paths, markers and cloud.
 set -euo pipefail
 set +u
 source /opt/ros/foxy/setup.bash

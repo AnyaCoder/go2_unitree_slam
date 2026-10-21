@@ -6,16 +6,18 @@ terrain_analysis_ext.launch）里的 <arg>/<param>/<remap>，原样传给节点�
 这里的数值就等于上游默认值（含 $(var ...) 展开），上游改了参数我们也自动跟随，
 不会出现"手抄一份参数"慢慢漂移的问题。
 
-相对上游 system_real_robot_with_route_planner.launch，本文件只做三件事：
+相对上游 system_real_robot_with_route_planner.launch，本文件只做四项适配：
   1. 用 LIO-SAM 替换 Point-LIO：/state_estimation、/registered_scan 重映射到
      /lio_sam_ros2/mapping/{re_location_odometry,cloud_registered}；
      far_planner 的 /odom_world 直接接真实里程计，避免 ROS2 多级 remap 不串联
-  2. 暴露 sensorOffsetX/Y：唯一真正取决于硬件安装位置的量。上游默认 0.3/0.0
-     对应 L1 装在狗头前方 0.3 m；MID360 装在背上时要用实测值
+  2. 暴露 sensorOffsetX/Y：唯一真正取决于硬件安装位置的量。上游 0.3/0.0
+     是 L1 前置安装值；本机使用 Livox MID-360 头颈倾斜安装，默认
+     0.16143/0.0，并通过 go2_mid360_hardware.env 统一供给
   3. 先把 cloud_registered 从 odom 转到 map 并过滤狗体回波，再交给
      terrainAnalysis/localPlanner；TF 不可用时宁可丢帧也不转发错误坐标
-  4. 不启动任何控制桥；状态上行、waypoint 和初始位姿分别由
-     run_real_view.sh 管理的独立 Python 进程负责
+  4. 最终架构中全局 FAR 在电脑固定地图上运行；狗端只运行 terrain 和
+     localPlanner/pathFollower。global_path_receiver 是公共 /way_point 的
+     唯一发布者。本 launch 保留 start_far 仅为隔离调试，生产启动必须为 false
 
 不启动（与上游一致或本机不需要）：joy_node（狗上没有 /dev/input/js0）、
 point_lio_unilidar（已由 LIO-SAM 取代）、rviz2、
@@ -114,21 +116,24 @@ def generate_launch_description():
     sport_out = LaunchConfiguration('sport_out')
     sensor_x = LaunchConfiguration('sensor_offset_x')
     sensor_y = LaunchConfiguration('sensor_offset_y')
+    max_speed = LaunchConfiguration('max_speed')
     start_far = LaunchConfiguration('start_far')
     start_cloud_filter = LaunchConfiguration('start_cloud_filter')
     cloud_topic = LaunchConfiguration('cloud_topic')
 
     planner_params, _ = read_upstream(
         'local_planner', 'local_planner.launch', 'localPlanner',
-        {'autonomyMode': 'true'})
+        {'autonomyMode': 'true', 'maxSpeed': max_speed})
+    # Upstream autonomyMode defaults goalX/goalY to (0, 0), which makes a newly
+    # relocalized robot drive toward the map origin before any operator input.
+    # NaN suppresses path generation until global_path_receiver publishes a
+    # finite hold pose or a real look-ahead target.
+    planner_params['goalX'] = float('nan')
+    planner_params['goalY'] = float('nan')
     follower_params, follower_remaps = read_upstream(
         'local_planner', 'local_planner.launch', 'pathFollower',
-        {'sport_request_topic': sport_out, 'pathFollowerGoalTopic': '/goal_point',
-         'autonomyMode': 'true'})
-    # LIO-SAM's registered cloud currently arrives at about 1 Hz on the real
-    # robot.  The upstream 0.5 s timeout makes pathFollower pause almost every
-    # other frame; 2 s tolerates one dropped frame but still stops if stale.
-    follower_params['collisionCloudTimeout'] = 2.0
+        {'autonomyMode': 'true', 'maxSpeed': max_speed})
+    follower_remaps += [('/api/sport/request', sport_out)]
     terrain_params, _ = read_upstream(
         'terrain_analysis', 'terrain_analysis.launch', 'terrainAnalysis')
     terrain_ext_params, _ = read_upstream(
@@ -167,14 +172,17 @@ def generate_launch_description():
                remappings=[('/odom_world', ODOM_TOPIC),
                            ('/terrain_cloud', '/terrain_map_ext'),
                            ('/scan_cloud', '/terrain_map'),
-                           ('/terrain_local_cloud', cloud_topic)])
+                           ('/terrain_local_cloud', cloud_topic),
+                           ('/way_point', '/far/way_point')])
 
     return LaunchDescription([
         DeclareLaunchArgument('sport_out', default_value='/api/sport/request',
                               description='运动指令话题；dry run 用 /nav/dry_cmd'),
-        DeclareLaunchArgument('sensor_offset_x', default_value='0.3',
-                              description='上游默认 0.3（L1 在狗头前 0.3m）；MID360 装背上需实测'),
+        DeclareLaunchArgument('sensor_offset_x', default_value='0.16143',
+                              description='Livox MID-360 头颈安装 x 偏移；可用实车测量值覆盖'),
         DeclareLaunchArgument('sensor_offset_y', default_value='0.0'),
+        DeclareLaunchArgument('max_speed', default_value='0.5',
+                              description='真机线速度上限（m/s）'),
         DeclareLaunchArgument(
             'start_cloud_filter', default_value='true',
             description='把 cloud_registered 从 odom 转到 map 并删除自身回波'),
@@ -183,6 +191,6 @@ def generate_launch_description():
             description='terrain/localPlanner 消费的 map-frame 点云'),
         DeclareLaunchArgument(
             'start_far', default_value='false',
-            description='电脑端已负责静态地图 FAR；狗端默认不重复启动 FAR'),
+            description='仅隔离调试用；最终架构由电脑固定地图运行 FAR'),
         cloud_filter, terrain, terrain_ext, planner, follower, far,
     ])

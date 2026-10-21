@@ -39,9 +39,9 @@ echo "正在检查真机地图栈..."
 nodes="$(timeout 8 ros2 node list 2>/dev/null || true)"
 topics="$(timeout 8 ros2 topic list 2>/dev/null || true)"
 
-if ! grep -qx '/pcdMapSim' <<<"$nodes"; then
+if ! grep -qx '/far_viz_receiver' <<<"$nodes"; then
   echo >&2
-  echo "未发现 /pcdMapSim。请先在另一个终端运行：" >&2
+  echo "未发现 /far_viz_receiver。请先在另一个终端运行：" >&2
   echo "  cd ${ROOT} && ./nav/run_real_view.sh" >&2
   echo "本脚本不会擅自重启该服务。" >&2
   exit 3
@@ -51,6 +51,9 @@ if ! grep -qx '/overall_map' <<<"$topics"; then
 fi
 if ! grep -qx '/state_estimation' <<<"$topics"; then
   echo "警告：当前未发现 /state_estimation 话题，Go2 位姿可能尚未就绪。" >&2
+fi
+if ! grep -qx '/viz_path_topic' <<<"$topics"; then
+  echo "警告：当前未发现 /viz_path_topic；确认电脑端 pcdMapSim/terrain/FAR 已启动且已收到 Goalpoint。" >&2
 fi
 
 # 正式配置已关闭点云 Decay，避免 AMDGPU + Ogre 1.12 持续分配

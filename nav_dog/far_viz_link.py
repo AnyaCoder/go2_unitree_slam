@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Stream Go2 state and an optional minimal obstacle cloud to the laptop.
+"""Stream Go2 state, local execution path and an optional compact cloud.
 
-Large static terrain is rendered on the laptop. The state connection never
-accepts robot commands; waypoints use a separate command process and port.
+The laptop owns FAR on the fixed map; the Go2 owns local planning/execution.
+This uplink carries robot state, TF/joints, the Go2 local path and a compact
+near-field display cloud. FAR markers and /way_point never cross this link.
 """
 
 import argparse
@@ -63,6 +64,7 @@ class FarVizLink(Node):
         self.closed = threading.Event()
         self.last_sent = [None] * len(TOPICS)
         self.last_callback_time = [0.0] * len(TOPICS)
+        self.topic_counts = [0] * len(TOPICS)
         self.last_cloud_time = 0.0
         self.latest_pose = None
         self.drop_count = 0
@@ -134,6 +136,7 @@ class FarVizLink(Node):
         if spec.remote_topic not in ('/tf', '/tf_static') and payload == self.last_sent[index]:
             return
         self.last_sent[index] = payload
+        self.topic_counts[index] += 1
         self.enqueue(payload)
 
     def cloud_callback(self, message):
@@ -237,10 +240,16 @@ class FarVizLink(Node):
             connected = self.client is not None
         with self.outbound.mutex:
             queued = len(self.outbound.queue)
+        def count(topic):
+            return next((self.topic_counts[i] for i, spec in enumerate(TOPICS)
+                         if spec.remote_topic == topic), 0)
         self.get_logger().info(
-            'laptop=%s queue=%d dropped=%d obstacle_frames=%d' %
+            'laptop=%s queue=%d dropped=%d odom=%d path=%d '
+            'obstacle_frames=%d' %
             ('connected' if connected else 'waiting', queued,
-             self.drop_count, self.cloud_count))
+             self.drop_count,
+             count('/lio_sam_ros2/mapping/re_location_odometry'),
+             count('/path'), self.cloud_count))
 
     def close(self):
         self.closed.set()

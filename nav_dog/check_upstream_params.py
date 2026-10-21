@@ -29,7 +29,8 @@ TARGETS = [
      'terrainAnalysisExt', {'checkTerrainConn': 'true'}),
 ]
 
-HARDWARE_KEYS = ('sensorOffsetX', 'sensorOffsetY', 'pathFolder')
+OVERRIDE_KEYS = ('sensorOffsetX', 'sensorOffsetY', 'pathFolder', 'maxSpeed',
+                 'goalX', 'goalY')
 
 
 def dump(node):
@@ -54,7 +55,7 @@ def main():
             continue
         diffs = []
         for key, want in sorted(ref.items()):
-            if key in HARDWARE_KEYS or key not in live:
+            if key in OVERRIDE_KEYS or key not in live:
                 continue
             got = live[key]
             if isinstance(want, (int, float)) and not isinstance(want, bool):
@@ -66,9 +67,9 @@ def main():
         print('%s  上游 %d 项  %s' % (node, len(ref), '一致' if not diffs else '有 %d 项不一致' % len(diffs)))
         for key, got, want in diffs:
             print('    %-28s 运行=%r 上游=%r' % (key, got, want))
-        for key in HARDWARE_KEYS:
+        for key in OVERRIDE_KEYS:
             if key in live:
-                print('    (硬件项) %-20s 运行=%r' % (key, live[key]))
+                print('    (本机项) %-20s 运行=%r' % (key, live[key]))
         bad += len(diffs)
 
     print('\n结果:', '全部与上游一致' if bad == 0 else '共 %d 处不一致' % bad)

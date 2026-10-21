@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Receive Go2 pose/TF/joint telemetry and the optional minimal obstacle cloud.
+"""Receive Go2 state, local execution path and the optional compact cloud.
 
-The laptop owns all large, static terrain data. Raw scans, camera data, FAR
-markers and paths are never accepted here; waypoints use a separate channel.
+FAR and global planning run on the laptop's fixed map. This receiver publishes
+only robot state, TF/joints, the Go2 local path and a display-only near-field
+cloud. FAR markers and /way_point remain local to their owning machines.
 """
 
 import argparse
@@ -32,7 +33,7 @@ from far_viz_protocol import (  # noqa: E402
 
 
 def read_pcd(path):
-    """Read binary PCD x/y/z and optional intensity into a compact cloud."""
+    """Read binary PCD x/y/z plus optional intensity and packed RGB."""
     with open(path, 'rb') as stream:
         lines = []
         while True:
@@ -78,10 +79,18 @@ def read_pcd(path):
     xyz = np.column_stack((table['x'], table['y'], table['z'])).astype(np.float32)
     intensity = (np.asarray(table['intensity'], dtype=np.float32)
                  if 'intensity' in fields else np.zeros(points, dtype=np.float32))
-    return xyz, intensity
+    rgb = None
+    for field in ('rgb', 'rgba'):
+        if field in fields:
+            packed = np.ascontiguousarray(table[field])
+            rgb = packed.view(np.uint32).copy()
+            if field == 'rgba':
+                rgb &= np.uint32(0x00FFFFFF)
+            break
+    return xyz, intensity, rgb
 
 
-def make_cloud(xyz, intensity, frame_id, stamp):
+def make_cloud(xyz, intensity, frame_id, stamp, rgb=None):
     cloud = PointCloud2()
     cloud.header.stamp = stamp
     cloud.header.frame_id = frame_id
@@ -91,14 +100,22 @@ def make_cloud(xyz, intensity, frame_id, stamp):
         PointField(name='x', offset=0, datatype=PointField.FLOAT32, count=1),
         PointField(name='y', offset=4, datatype=PointField.FLOAT32, count=1),
         PointField(name='z', offset=8, datatype=PointField.FLOAT32, count=1),
-        PointField(name='intensity', offset=12, datatype=PointField.FLOAT32, count=1),
     ]
+    if rgb is None:
+        cloud.fields.append(PointField(
+            name='intensity', offset=12, datatype=PointField.FLOAT32, count=1))
+    else:
+        cloud.fields.append(PointField(
+            name='rgb', offset=12, datatype=PointField.FLOAT32, count=1))
     cloud.is_bigendian = False
     cloud.point_step = 16
     cloud.row_step = cloud.point_step * len(xyz)
     data = np.empty((len(xyz), 4), dtype=np.float32)
     data[:, :3] = xyz
-    data[:, 3] = intensity
+    if rgb is None:
+        data[:, 3] = intensity
+    else:
+        data[:, 3] = np.asarray(rgb, dtype=np.uint32).view(np.float32)
     cloud.data = data.tobytes()
     cloud.is_dense = True
     return cloud
@@ -109,9 +126,12 @@ def restamp(message, stamp):
             transform.header.stamp = stamp
     elif hasattr(message, 'header'):
         message.header.stamp = stamp
-        if hasattr(message, 'poses'):
-            for pose in message.poses:
-                pose.header.stamp = stamp
+    if hasattr(message, 'markers'):
+        for marker in message.markers:
+            marker.header.stamp = stamp
+    if hasattr(message, 'poses'):
+        for pose in message.poses:
+            pose.header.stamp = stamp
     return message
 
 
@@ -150,9 +170,9 @@ class FarVizReceiver(Node):
             PointCloud2, '/added_obstacles', 5)
 
         if map_path:
-            xyz, intensity = read_pcd(map_path)
+            xyz, intensity, rgb = read_pcd(map_path)
             self.static_cloud = make_cloud(
-                xyz, intensity, 'map', self.get_clock().now().to_msg())
+                xyz, intensity, 'map', self.get_clock().now().to_msg(), rgb=rgb)
             self.map_pub = self.create_publisher(PointCloud2, '/overall_map', 2)
             self.create_timer(1.0, self.publish_map)
             self.get_logger().info('static map: %d points from %s' %
@@ -182,7 +202,7 @@ class FarVizReceiver(Node):
             connection.settimeout(None)
             with self.send_lock:
                 self.connection = connection
-            self.get_logger().info('connected to Go2 FAR view at %s:%d' %
+            self.get_logger().info('connected to Go2 state uplink at %s:%d' %
                                    (self.host, self.port))
             buf = bytearray()
             try:
@@ -272,10 +292,11 @@ class FarVizReceiver(Node):
             return next((self.topic_counts[i] for i, item in enumerate(TOPICS)
                          if item.local_topic == topic), 0)
         self.get_logger().info(
-            'robot=%s:%d %s packets=%d odom=%d tf=%d tf_static=%d joints=%d cloud=%d' %
+            'robot=%s:%d %s packets=%d odom=%d tf=%d tf_static=%d '
+            'joints=%d path=%d cloud=%d' %
             (self.host, self.port, state, self.packet_count,
              count('/state_estimation'), count('/tf'), count('/tf_static'),
-             count('/joint_states'), self.cloud_count))
+             count('/joint_states'), count('/path'), self.cloud_count))
 
     def close(self):
         self.closed.set()

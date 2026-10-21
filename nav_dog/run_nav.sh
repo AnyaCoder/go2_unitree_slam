@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # usage: ./run_nav.sh dry|live
-#   SENSOR_OFFSET_X=-0.15 ./run_nav.sh live   # 覆盖 MID360 相对机身中心的 x 偏移
+#   SENSOR_OFFSET_X=0.187 ./run_nav.sh live  # 用实车测量值覆盖 MID360 默认值
 set -e
 MODE="${1:-dry}"
-SENSOR_OFFSET_X="${SENSOR_OFFSET_X:-0.3}"   # 上游默认 0.3（L1 在狗头前 0.3 m），MID360 需实测
-SENSOR_OFFSET_Y="${SENSOR_OFFSET_Y:-0.0}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=go2_mid360_hardware.env
+source "${SCRIPT_DIR}/go2_mid360_hardware.env"
 set +u
 source /opt/ros/foxy/setup.bash
 source /unitree/module/graph_pid_ws/install/local_setup.bash
@@ -21,5 +22,7 @@ else
 fi
 exec ros2 launch /home/unitree/go2_nav/go2_nav.launch.py \
   sport_out:=$SPORT \
-  sensor_offset_x:=$SENSOR_OFFSET_X \
-  sensor_offset_y:=$SENSOR_OFFSET_Y
+  sensor_offset_x:="$SENSOR_OFFSET_X" \
+  sensor_offset_y:="$SENSOR_OFFSET_Y" \
+  max_speed:="$GO2_MAX_SPEED" \
+  start_far:=false
