@@ -1,85 +1,129 @@
-# Go2 点选导航：配置来源与改动清单
+# Go2 点选导航：配置来源与最终链路
 
-一句话：规划参数**不再手抄**，`go2_nav.launch.py` 在启动时直接解析上游
-`autonomy_stack_go2` 的 launch XML 取值，所以永远等于上游默认值。
-我们相对上游只保留 3 处差异，其中 1 处（雷达安装偏移）必须按实车测量。
+一句话：电脑用固定 PCD 运行 `pcdMapSim -> terrain -> FAR`，通过 TCP 8899
+只向狗端发送有序全局路径；狗端不运行 FAR，只运行 terrain、
+localPlanner 和 pathFollower。本机额外设置 MID-360 安装偏移、真机
+`0.5 m/s` 限速和禁止 `(0,0)` 初始目标。权威说明见 [`必看.md`](必看.md)。
 
 ## 1. 参数唯一来源
 
 | 节点 | 取值来源（上游文件） |
 |---|---|
-| `terrainAnalysis` | `terrain_analysis/launch/terrain_analysis.launch` |
-| `terrainAnalysisExt` | `terrain_analysis_ext/launch/terrain_analysis_ext.launch`（`checkTerrainConn=true`，与上游 `system_real_robot*.launch` 一致） |
-| `localPlanner` | `local_planner/launch/local_planner.launch` |
-| `pathFollower` | `local_planner/launch/local_planner.launch`（含 `/api/sport/request`、`/way_point` 两条 remap） |
-| `far_planner` | `far_planner/config/default.yaml` + 上游 `far_planner.launch` 的 4 条 remap |
+| `pcdMapSim` | `autonomy_stack_go2/src/utilities/map_sim/launch/map_sim.launch.py` |
+| `terrainAnalysis`（电脑） | `terrain_analysis/launch/terrain_analysis.launch` |
+| `terrainAnalysisExt`（电脑） | `terrain_analysis_ext/launch/terrain_analysis_ext.launch` |
+| `far_planner`（电脑） | `far_planner/config/default.yaml` |
+| `terrainAnalysis`（狗端） | `terrain_analysis/launch/terrain_analysis.launch` |
+| `terrainAnalysisExt`（狗端） | `terrain_analysis_ext/launch/terrain_analysis_ext.launch` |
+| `localPlanner`（狗端） | `local_planner/launch/local_planner.launch` |
+| `pathFollower`（狗端） | `local_planner/launch/local_planner.launch` |
 
-`go2_nav.launch.py` 里没有第二份数字：它 `ET.parse` 上面这些文件，展开
-`$(var ...)`、`$(find-pkg-share ...)`，把 `<param>`、`<remap>` 原样交给节点。
-上游改参数，我们重启即跟随，不会出现两边不一致。
+电脑端 `nav/global_planner.launch.py` 动态加载上游已安装的
+`map_sim.launch.py`，只保留 `pcdMapSim`、`terrainAnalysis`、
+`terrainAnalysisExt`，再按上游 `default.yaml` 启动 FAR。电脑 FAR 的
+`/way_point` 固定重映射到 `/far/way_point`，确保公共 `/way_point` 只存在于
+狗端。这样上游参数变化会自动跟随，也不会在电脑上误启动
+`localPlanner/pathFollower`。
 
-2026-10-20 逐项对账结果（旧手抄版 vs 上游）：
+狗端 `go2_nav.launch.py` 仍直接解析上游 launch XML，原样传递参数。狗端覆盖项：
 
+- `sensorOffsetX/Y`：MID-360 安装位置
+- `maxSpeed=0.5 m/s`：真机限速
+- `goalX/goalY=NaN`：没有有效 `/way_point` 前禁止追 `(0,0)`
+
+## 2. 最终数据链路
+
+电脑：
+
+```text
+固定 PCD
+  -> pcdMapSim(external_odom_topic=/state_estimation)
+  -> terrainAnalysis / terrainAnalysisExt
+  -> FAR
+  -> /viz_path_topic
+  -> global_path_sender
+  -> TCP 8899
 ```
-localPlanner      38/38 项一致     terrainAnalysis     31/31 项一致
-pathFollower      49/49 项一致     terrainAnalysisExt  17/17 项一致
-唯一偏差：sensorOffsetX  旧写 0.0 / 上游 system_real_robot 用 0.3
+
+狗端：
+
+```text
+TCP 8899
+  -> global_path_receiver
+  -> /way_point
+  -> localPlanner
+  -> /path
+  -> pathFollower
+  -> /api/sport/request
 ```
 
-## 2. 相对上游的 3 处改动（都在 `go2_nav.launch.py` 里）
+狗端不运行 FAR。电脑端不运行 `localPlanner/pathFollower`。电脑端也不发布
+公共 `/way_point`；电脑 FAR 的本机 waypoint 仅为 `/far/way_point`。
 
-1. **用 LIO-SAM 替换 Point-LIO**
-   `/state_estimation` → `/lio_sam_ros2/mapping/odometry`，
-   `/registered_scan` → `/lio_sam_ros2/mapping/cloud_registered`。
-   `far_planner` 仍按上游写成 `/odom_world → /state_estimation`，由 ROS 2
-   重映射链自动落到 LIO-SAM 上，far 的配置一个字没动。
-2. **`sensorOffsetX/Y` 提成 launch 参数**（默认 0.3 / 0.0，即上游值）。
-   这是唯一跟硬件安装位置绑定、必须实测的量，见第 3 节。
-3. **保留上游局部规划链**，并把 `pathFollower` 的 `/way_point` 按上游
-   `system_real_robot_with_route_planner.launch` 的写法指到 `/goal_point`。
-   状态上行、waypoint 下行和初始位姿分别由三个独立 Python 桥处理，不再启动
-   旧 C++/Python `nav_link`。同时按需把 `sport_out` 换成 `/nav/dry_cmd` 做干跑。
+状态上行：
 
-不启动、也不需要的东西（均为上游原本就没跑在本机上的）：
-
-- `joy_node`：狗上没有 `/dev/input/js0`；FAR 导航不依赖手柄节点
-- `point_lio_unilidar`：已被 LIO-SAM 取代
-- `rviz2`、`go2_camera_bridge.py`：狗端无显示、相机桥由其它服务占用 8765
-- `/sensor → /vehicle` 静态 TF：规划链只读 `/state_estimation`，不看 TF
-
-## 3. `sensorOffsetX` 怎么定（唯一必须实测的项）
-
-上游代码的约定（`localPlanner.cpp:156`、`pathFollower.cpp:175`）：
-
+```text
+狗端 re_location_odometry / tf / tf_static / joint_states / path
+  -> TCP 8898
+  -> 电脑 far_viz_receiver
 ```
+
+## 3. `sensorOffsetX` 怎么定
+
+本机雷达为 **Livox MID-360**，安装在狗头/前上方，向下倾斜约 13°。
+`sensorOffsetX/Y` 只描述 MID-360 相对 localPlanner 车体中心的平面平移，不承载
+pitch。上游约定：
+
+```text
 vehicle = sensor - R(yaw) * [sensorOffsetX, sensorOffsetY]
 ```
 
-即 offset 是**车体中心在雷达坐标系里的位置**。所以：
+符号：
 
-- 雷达装在车体中心**前方** d 米 → `sensorOffsetX = +d`（L1 在狗头前 0.3 m，正是上游的 0.3）
-- 雷达装在车体中心**后方** d 米 → `sensorOffsetX = -d`
-- 雷达在中心**左侧** d 米 → `sensorOffsetY = +d`，右侧为 `-d`
+- MID360 在车体中心前方 d 米：`sensorOffsetX = +d`
+- MID360 在车体中心后方 d 米：`sensorOffsetX = -d`
+- MID360 在车体中心左侧 d 米：`sensorOffsetY = +d`
 
-量法（两人五秒）：让狗站平，量四条腿围成矩形的中心点，到 MID360 光学中心
-（正面玻璃中心）沿机身前后/左右方向的投影距离。
+默认值：
 
-> MID360 装在背上偏后，**大概率是负值**（例如 -0.10 ~ -0.20）。
-> 不实测就沿用 0.3 的话，碰撞外框会整体前移 0.3+d 米：
-> `localPlanner` 的打分会因为 footprint 判定全中而全部清零，
-> 表现为 `/path` 只有 1 个 `(0,0,0)` 点、`pathFollower` 报
-> `Waypoint aborted: no progress`。这是当前 1-pose 卡点的首要嫌疑。
+```text
+SENSOR_OFFSET_X=0.16143
+SENSOR_OFFSET_Y=0.0
+```
 
-先按实测值跑，命令行临时改也不用编辑文件：
+来源是公开 Go2 + MID-360 URDF：
+
+```text
+base_link -> imu:         x = -0.02557
+imu -> livox_frame:       x = +0.1870, pitch = 0.22689 rad (~13°)
+base_link -> livox_frame: x = 0.16143 m
+```
+
+这不是全球统一的厘米级真值。本车可实测覆盖：
 
 ```bash
-SENSOR_OFFSET_X=-0.15 ./run_nav.sh dry
+SENSOR_OFFSET_X=0.187 ./run_nav.sh dry
 ```
+
+所有入口共用：
+
+```text
+nav_dog/go2_mid360_hardware.env
+```
+
+`start_far_real.sh`、狗端 `run_nav.sh` 和 `global_path_receiver` 必须使用同一个
+偏移。否则保持目标相对车体会产生固定“胡萝卜牵引”。
 
 ## 4. 启动与验证
 
-真机导航的唯一启动入口见
-`docs/真机SLAM冷启动与重定位成功流程_20261021.md`：
+唯一真机入口：
+
+```bash
+cd ~/go2_unitree_slam
+./nav/start_far_real.sh
+```
+
+排障三终端：
 
 ```text
 狗端 A：./0_unitree_slam.sh
@@ -87,41 +131,47 @@ SENSOR_OFFSET_X=-0.15 ./run_nav.sh dry
 电脑端 C：./nav/run_real_view.sh
 ```
 
-不要只运行 `run_nav.sh` 就认为整套导航已启动；也不要再启动
-`demo_mid360`、第二套 Livox/LIO 或第二个 RViz。
-下面仅保留狗端局部导航链的参数与验证方法。
+不要只运行 `run_nav.sh` 就认为整套导航已启动；不要再启动
+`demo_mid360`、第二套 Livox/LIO、狗端 FAR 或第二个 RViz。
+
+狗端参数检查：
 
 ```bash
 cd /home/unitree/go2_nav
-./run_nav.sh dry          # 干跑：运动指令发到 /nav/dry_cmd
-./run_nav.sh live         # 实机：运动指令发到 /api/sport/request
-```
-
-启动后核对参数确实等于上游（不需要肉眼比对 XML）：
-
-```bash
-python3 /home/unitree/go2_nav/check_upstream_params.py
-```
-
-期望输出每个节点“一致”，最后一行 `结果: 全部与上游一致`；
-`sensorOffsetX/Y` 会单独列为“硬件项”供确认，不计为错误。
-
-其他常用检查：
-
-```bash
+python3 check_upstream_params.py
 ros2 param get /localPlanner sensorOffsetX
-ros2 param get /localPlanner autonomyMode      # go2_nav.launch.py 固定为 true
-ros2 topic echo --once /path                   # 正常应有几十个 pose，不是 1 个
+ros2 param get /localPlanner autonomyMode
+ros2 param get /localPlanner goalX
+ros2 param get /localPlanner goalY
+timeout 3 ros2 topic echo /path
 ```
+
+`goalX/goalY` 启动时应为 NaN。狗端 `global_path_receiver.py` 是公共
+`/way_point` 唯一发布者：
+
+```text
+无路径 -> 当前重定位车体位姿
+有效路径 -> 全局路径看前点
+路径超时/空 -> 回到当前重定位车体位姿
+```
+
+电脑检查：
+
+```bash
+./nav/check_real_chain.sh
+tail -f /tmp/go2_laptop_global_planner.log
+tail -f /tmp/go2_global_path_sender.log
+```
+
+电脑必须有 `pcdMapSim/terrain/FAR/global_path_sender`，不能有
+`localPlanner/pathFollower`。狗端必须有 `terrain/localPlanner/pathFollower/
+global_path_receiver`，不能有 `far_planner/far_command_link`。
 
 ## 5. 部署到狗
 
 ```bash
-scp go2_unitree_slam/nav_dog/go2_nav.launch.py \
-    go2_unitree_slam/nav_dog/check_upstream_params.py \
-    go2_unitree_slam/nav_dog/run_nav.sh \
-    go2-wifi:/home/unitree/go2_nav/
-ssh go2-wifi 'chmod +x /home/unitree/go2_nav/run_nav.sh'
+scp go2_unitree_slam/nav_dog/{go2_nav.launch.py,check_upstream_params.py,run_nav.sh,nav_path_protocol.py,global_path_receiver.py,run_global_path_receiver.sh,go2_mid360_hardware.env} go2-wifi:/home/unitree/go2_nav/
+ssh go2-wifi 'chmod +x /home/unitree/go2_nav/run_nav.sh /home/unitree/go2_nav/run_global_path_receiver.sh'
 ```
 
 前提：狗上 `/home/unitree/autonomy_stack_go2/install` 已编译且可 source。
@@ -215,5 +265,6 @@ python3 tools/pcd_map_edit.py color-ground GlobalMap_clean_20261020_edited_noroo
 - `GlobalMap_clean_20261020_nav_green.pcd`：PCL Viewer 用，绿色地面 + 灰色结构
 - `GlobalMap_clean_20261020_walkable_ground.pcd`：RViz 用，只含绿色地面点
 
-RViz 使用 `space_viz` 发布的 `/sim/free_space` 和 `/sim/free_boundary` 显示可走区域及其边界；路径与目标显示使用 FAR Planner 原生话题。
-绿色地面是显示层，不参与定位和碰撞计算。
+FAR 导航运行架构不使用 `spaceViz`、`/sim/free_space` 或
+`/sim/free_boundary`。固定导航 PCD 只是电脑 RViz/PCL 背景；绿色地面若存在，
+也只是显示层，不参与狗端 terrain、FAR、localPlanner 或碰撞计算。

@@ -3,20 +3,26 @@
 This repository contains the laptop-side and Go2-side integration for a
 fixed-map navigation stack on Unitree Go2 EDU with a Livox MID-360.
 
-The design keeps global planning on the laptop and local planning on the robot:
+Planning is split at the network boundary:
 
 ```text
-laptop fixed PCD map
-  -> pcdMapSim + FAR planner
-  -> /goal_point and /way_point over TCP 8899
-  -> Go2 localPlanner
-  -> Go2 pathFollower
+Laptop fixed PCD
+  -> pcdMapSim -> terrain -> FAR
+  -> ordered global path over TCP 8899
+  -> Go2 global_path_receiver -> /way_point
+  -> Go2 localPlanner -> pathFollower
   -> /api/sport/request
 ```
 
-Robot odometry, TF and joint states are forwarded to the laptop over TCP 8898.
-The robot does not run FAR or RViz. The physical remote controller remains the
-final takeover mechanism.
+The Go2 never runs FAR. The laptop never runs `localPlanner` or `pathFollower`.
+Robot odometry, TF, joints, the Go2 local execution path and a compact 1 Hz
+near-field cloud are forwarded to the laptop over TCP 8898. The laptop's FAR
+consumes the fixed PCD through `pcdMapSim` and follows the robot's real
+relocalized pose. RViz Goalpoint feeds the laptop-local `/goal_point`; only a
+small, ordered FAR polyline crosses TCP 8899. `/way_point` is published on the
+Go2 by `global_path_receiver.py` only. The laptop FAR waypoint is remapped to
+the local-only `/far/way_point` topic. The compact cloud is display-only, and
+the physical remote controller remains the final takeover mechanism.
 
 ## Upstream Algorithms
 
@@ -60,7 +66,14 @@ cd ~/go2_unitree_slam
 ```
 
 After RViz opens, use `2D Pose Estimate` once. Wait until the receiver logs show
-real SLAM odometry, TF and joint data. Then send a FAR goal point.
+real SLAM odometry, TF and joint data. Then use Goalpoint: the laptop FAR plans
+on the fixed map and sends the resulting ordered path to the Go2.
+
+The dog-side launch replaces upstream localPlanner's initial `(0, 0)` target
+with NaN. `global_path_receiver.py` publishes the current relocalized body pose
+as a hold target until a valid global path arrives, and falls back to that hold
+target if the path becomes empty or stale. This prevents startup motion toward
+the map origin or continued motion along an old path.
 
 Stop only the processes owned by this project:
 
@@ -77,8 +90,8 @@ Read-only acceptance check:
 ## Repository Layout
 
 ```text
-nav/                 Laptop fixed-map, FAR, RViz, TCP receivers and launchers
-nav_dog/             Go2 launch configuration, telemetry and command bridges
+nav/                 Laptop fixed-map FAR, global-path sender, display and RViz
+nav_dog/             Go2 terrain/local execution, path receiver and telemetry
 tools/               Map cleanup, quality report and walkable-area editor
 docs/                Architecture, cold-start, display and known-issue notes
 必看.md              Authoritative operating and safety rules
@@ -95,12 +108,22 @@ unitree_slam/        Local external checkout; ignored by Git
 
 ## Safety Boundary
 
-When FAR navigation is active, the only allowed motion-control chain is:
+When navigation is active, the only allowed motion-control chain is:
 
 ```text
-laptop FAR -> TCP 8899 -> Go2 localPlanner/pathFollower
+Laptop RViz Goalpoint -> Laptop FAR
+  -> ordered global path over TCP 8899
+  -> Go2 global_path_receiver -> /way_point
+  -> Go2 localPlanner/pathFollower
 ```
+
+The Go2 must not run FAR. The laptop must not run `localPlanner` or
+`pathFollower`, and the laptop must never publish `/way_point`. Only
+`global_path_receiver.py` may publish the dog-side public `/way_point`.
 
 The legacy UnitreeSlam motion nodes
 `dog_control_B1_one` and `go2_control_by_sdk send_cmd` must not run at the same
 time. Always verify this before allowing the robot into locomotion mode.
+
+The old `waypoint_sender.py` / `far_command_link.py` path is retained only as
+historical code and is not part of the startup chain.

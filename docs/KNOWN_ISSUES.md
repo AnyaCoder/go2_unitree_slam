@@ -2,60 +2,70 @@
 
 Updated: 2026-10-21
 
-## 1. Robot can resume an old local path after standing
+## 1. Stale local path can resume after Damping/Stand
 
 ### Symptom
 
-The Go2 is stationary in Damping mode. When the operator switches it to a
-standing/locomotion mode, it can start moving forward immediately even though no
-new RViz goal was sent.
+The Go2 is stationary in Damping mode. After the operator switches it back to a
+standing/locomotion mode, it can resume an old local path even though no new RViz
+goal was just sent.
 
 ### Evidence
 
-Runtime inspection showed:
-
-- the laptop waypoint sender had `sent=0`;
-- no fresh `/goal_point` was published;
-- `pathFollower` still published `/api/sport/request`;
-- `localPlanner` publishes `/path`, while `pathFollower` retains the last path.
+- `localPlanner` publishes `/path`;
+- upstream `pathFollower` retains its last path state;
+- no fresh path may be generated at the instant of standing.
 
 ### Root cause
 
-The upstream `localPlanner` initializes `goalX=0` and `goalY=0`. In autonomy
-mode it does not have a separate "has a goal ever been received" state, so it
-can plan toward the map origin before the operator sends a waypoint.
+Upstream `localPlanner` initializes `goalX=0`, `goalY=0` in autonomy mode.
+The integration layer now replaces those values with NaN, so startup cannot
+plan toward the map origin.
 
-The upstream `pathFollower` retains `pathInit=true` after receiving a local path.
-Without a path timeout it can continue issuing motion requests based on stale
-path data across Damping/Stand transitions.
+Upstream `pathFollower` can still retain `pathInit=true` after receiving a local
+path. The final architecture stops new global-path input from retriggering
+motion: the Go2 `global_path_receiver` holds the current body pose when the
+global path is empty or older than 2 seconds. However, the unchanged upstream
+`pathFollower` can retain the last locally planned `/path` across a
+Damping/Stand transition.
 
 ### Current status
 
-The running system uses the original upstream
-`jizhang-cmu/autonomy_stack_go2` FAR/local-planner implementation. This
-repository documents the issue but does not vendor or replace those planner
-sources.
+Implemented:
 
-### Required fix before unattended operation
+- laptop owns FAR on the fixed PCD;
+- laptop sends only an ordered global path over TCP 8899;
+- Go2 has no `far_planner`;
+- only `global_path_receiver.py` publishes `/way_point`;
+- no path -> current body pose;
+- stale global path -> current body pose;
+- localPlanner initial goal is NaN.
 
-Before unattended operation, verify that the deployed upstream planner revision
-provides, or that the integration layer enforces:
+Not implemented in upstream algorithm:
+
+- explicit clear of the retained local path on Damping/Stand transition;
+- a pathFollower-local freshness timeout independent of input topic rate.
+
+### Required behavior before unattended operation
+
+Before unattended operation, verify a deployed planner revision provides:
 
 - waypoint reception and active-goal state;
 - local-path frame validation and minimum path length;
-- path and odometry freshness timeouts;
-- one-shot `StopMove` when the path, goal or odometry becomes stale;
+- local-path freshness and odometry freshness handling;
+- a defined first motion request after Damping/Stand transitions;
 - bounded waypoint speed and yaw rate.
 
-Until those safety conditions are deployed and verified, do not let the robot enter
-locomotion mode while a stale FAR goal or local path may exist.
+Until those conditions are verified, do not let the robot enter locomotion mode
+while a stale local path may exist. Keep the physical remote controller available
+for takeover.
 
 ## 2. `nav2_costmap` can crash during relocation
 
 During one relocation run, `CloudToScanForCostmap` exited with a segmentation
-fault. FAR control and SLAM odometry can continue, but the costmap process is not
-part of the fixed-map FAR control path and should not be treated as a required
-node by this project.
+fault. FAR navigation and SLAM odometry can continue, but the costmap process is
+not part of the fixed-map global-planning chain and must not be treated as a
+required node.
 
 The relocation launch must retain LIO/global localization while suppressing
-legacy motion-control/costmap processes that are not used by FAR navigation.
+legacy motion-control/costmap processes not used by this architecture.
