@@ -1,0 +1,4 @@
+map: GlobalMap_clean_20261020_edited_noroof.pcd
+start: x=-2.440 y=-2.712 yaw=178.8deg (3.1207 rad)
+floor_z=-0.511 base_z=-0.159
+note: wall 0.368 m from center; body corner sweep 0.383 m -> 1.5 cm overlap, rotation may be vetoed by map

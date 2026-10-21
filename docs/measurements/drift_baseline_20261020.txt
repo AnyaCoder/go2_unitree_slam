@@ -1,0 +1,10 @@
+# drift baseline after imuTolidar -> [0,0,0] (Go2 EDU + Livox MID360)
+# iso_time: 2026-10-20 19:01 (Asia/Shanghai)
+# frame: map (/lio_sam_ros2/mapping/re_location_odometry)
+# note: ICP re-aligned yaw by about +12 deg vs the pre-change pose
+t: 1792494102.4929924
+x: -4.3613
+y: 0.2488
+z: -0.1761
+yaw: 0.05206
+yaw_deg: 2.98

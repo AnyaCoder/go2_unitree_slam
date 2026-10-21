@@ -1,60 +1,106 @@
-# unitree_sdk2
-Unitree robot sdk version 2.
+# Go2 Fixed-Map FAR Navigation
 
-### Prebuild environment
-* OS  (Ubuntu 20.04 LTS)  
-* CPU  (aarch64 and x86_64)   
-* Compiler  (gcc version 9.4.0) 
+This repository contains the laptop-side and Go2-side integration for a
+fixed-map navigation stack on Unitree Go2 EDU with a Livox MID-360.
 
-### Environment Setup
+The design keeps global planning on the laptop and local planning on the robot:
 
-Before building or running the SDK, ensure the following dependencies are installed:
-
-- CMake (version 3.10 or higher)
-- GCC (version 9.4.0)
-- Make
-
-You can install the required packages on Ubuntu 20.04 with:
-
-```bash
-apt-get update
-apt-get install -y cmake g++ build-essential libyaml-cpp-dev libeigen3-dev libboost-all-dev libfmt-dev
+```text
+laptop fixed PCD map
+  -> pcdMapSim + FAR planner
+  -> /goal_point and /way_point over TCP 8899
+  -> Go2 localPlanner
+  -> Go2 pathFollower
+  -> /api/sport/request
 ```
 
-### Build examples
+Robot odometry, TF and joint states are forwarded to the laptop over TCP 8898.
+The robot does not run FAR or RViz. The physical remote controller remains the
+final takeover mechanism.
 
-To build the examples inside this repository:
+## Upstream Algorithms
 
-```bash
-mkdir build
-cd build
-cmake ..
-make
+This repository is integration and operations glue, not a fork of either planner:
+
+- FAR global planning comes from the original
+  [FAR Planner](https://github.com/MichaelFYang/far_planner) algorithm used by
+  [jizhang-cmu/autonomy_stack_go2](https://github.com/jizhang-cmu/autonomy_stack_go2).
+- `localPlanner`, `pathFollower`, `terrainAnalysis` and `terrainAnalysisExt`
+  are the original jizhang-cmu autonomy-stack implementations.
+- Unitree SDK 2 at the repository root remains the upstream robot SDK.
+
+Project-specific code under `nav/` and `nav_dog/` supplies static-map loading,
+network isolation, telemetry, point transport, initial-pose handling, launch
+orchestration and visualization. It does not replace the planner algorithms.
+
+## Requirements
+
+- Unitree Go2 EDU with Livox MID-360
+- Ubuntu 20.04 and ROS 2 Foxy
+- `autonomy_stack_go2` installed on both the laptop and the Go2
+- UnitreeSlam and its `graph_pid_ws` workspace installed on the Go2
+- SSH alias `go2-wifi` pointing to the robot
+- One canonical map at:
+
+```text
+GlobalMap_clean_20261020_1920_nav_green_edited.pcd
 ```
 
-### Installation
+The upstream Unitree SDK 2 directories remain at the repository root because
+this project is built on top of that SDK. Third-party checkouts and generated
+build workspaces are intentionally ignored.
 
-To build your own application with the SDK, you can install the unitree_sdk2 to your system directory:
+## Quick Start
 
-```bash
-mkdir build
-cd build
-cmake ..
-sudo make install
-```
-
-Or install unitree_sdk2 to a specified directory:
+Start the complete real-robot stack from the laptop:
 
 ```bash
-mkdir build
-cd build
-cmake .. -DCMAKE_INSTALL_PREFIX=/opt/unitree_robotics
-sudo make install
+cd ~/go2_unitree_slam
+./nav/start_far_real.sh
 ```
 
-You can refer to `example/cmake_sample` on how to import the unitree_sdk2 into your CMake project. 
+After RViz opens, use `2D Pose Estimate` once. Wait until the receiver logs show
+real SLAM odometry, TF and joint data. Then send a FAR goal point.
 
-Note that if you install the library to other places other than `/opt/unitree_robotics`, you need to make sure the path is added to "${CMAKE_PREFIX_PATH}" so that cmake can find it with "find_package()".
+Stop only the processes owned by this project:
 
-### Notice
-For more reference information, please go to [Unitree Document Center](https://support.unitree.com/home/zh/developer).
+```bash
+./nav/stop_real_all.sh
+```
+
+Read-only acceptance check:
+
+```bash
+./nav/check_real_chain.sh
+```
+
+## Repository Layout
+
+```text
+nav/                 Laptop fixed-map, FAR, RViz, TCP receivers and launchers
+nav_dog/             Go2 launch configuration, telemetry and command bridges
+tools/               Map cleanup, quality report and walkable-area editor
+docs/                Architecture, cold-start, display and known-issue notes
+必看.md              Authoritative operating and safety rules
+unitree_slam/        Local external checkout; ignored by Git
+```
+
+## Documentation
+
+- [必看.md](必看.md): mandatory architecture and control-ownership rules
+- [docs/README.md](docs/README.md): documentation index
+- [Go2_Mid360_SLAM_操作手册.md](Go2_Mid360_SLAM_操作手册.md): mapping and operation guide
+- [Go2点选导航_配置说明.md](Go2点选导航_配置说明.md): point-to-point navigation setup
+- [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md): current safety and integration risks
+
+## Safety Boundary
+
+When FAR navigation is active, the only allowed motion-control chain is:
+
+```text
+laptop FAR -> TCP 8899 -> Go2 localPlanner/pathFollower
+```
+
+The legacy UnitreeSlam motion nodes
+`dog_control_B1_one` and `go2_control_by_sdk send_cmd` must not run at the same
+time. Always verify this before allowing the robot into locomotion mode.
