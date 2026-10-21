@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Forward local navigation points to the Go2 command channel.
+"""LEGACY / NOT STARTED: old /goal_point to Go2 FAR sender.
 
-The operator's final goal comes from /goal_point. The laptop FAR planner's
-current navigation point comes from /way_point. Only those map-frame points are
-sent; velocity, pose initialization and generic robot commands are rejected.
+The final architecture keeps /goal_point local to the laptop FAR and sends the
+resulting ordered path with global_path_sender.py. This file is retained only
+for historical reference and is not part of the startup chain.
 """
 
 import argparse
@@ -23,9 +23,7 @@ from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'nav_dog'))
-from far_command_protocol import (  # noqa: E402
-    OP_FAR_WAYPOINT, OP_FINAL_GOAL, pack_waypoint_frame,
-)
+from far_command_protocol import OP_FINAL_GOAL, pack_waypoint_frame  # noqa: E402
 
 
 class WaypointSender(Node):
@@ -38,8 +36,8 @@ class WaypointSender(Node):
         self.connection = None
         self.connection_lock = threading.Lock()
         self.outbound = queue.Queue(maxsize=8)
-        self.last_points = {}
-        self.last_accept_times = {}
+        self.last_goal = None
+        self.last_accept_time = 0.0
         self.sent_count = 0
         self.drop_count = 0
         self.min_interval = 0.2
@@ -47,41 +45,35 @@ class WaypointSender(Node):
         qos = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=5,
                          reliability=ReliabilityPolicy.RELIABLE)
         self.create_subscription(
-            PointStamped, '/goal_point',
-            lambda message: self.on_point(message, OP_FINAL_GOAL, 'final_goal'), qos)
-        self.create_subscription(
-            PointStamped, '/way_point',
-            lambda message: self.on_point(message, OP_FAR_WAYPOINT, 'far_waypoint'), qos)
+            PointStamped, '/goal_point', self.on_goal, qos)
         self.create_timer(5.0, self.report_status)
 
         self.sender = threading.Thread(target=self.send_loop, daemon=True)
         self.sender.start()
         self.get_logger().info(
-            'waypoint sender target %s:%d; waiting for /goal_point and /way_point' %
+            'final-goal sender target %s:%d; waiting for /goal_point' %
             (self.host, self.port))
 
-    def on_point(self, message, opcode, label):
+    def on_goal(self, message):
         x = float(message.point.x)
         y = float(message.point.y)
         z = float(message.point.z)
         if not all(math.isfinite(value) for value in (x, y, z)):
             self.drop_count += 1
-            self.get_logger().warn('drop non-finite local waypoint')
+            self.get_logger().warn('drop non-finite final goal')
             return
         now = time.monotonic()
-        last_point = self.last_points.get(opcode)
-        last_accept_time = self.last_accept_times.get(opcode, 0.0)
         duplicate = (
-            last_point is not None and
-            math.dist((x, y, z), last_point) < 0.01 and
-            now - last_accept_time < 0.5
+            self.last_goal is not None and
+            math.dist((x, y, z), self.last_goal) < 0.01 and
+            now - self.last_accept_time < 0.5
         )
-        if duplicate or now - last_accept_time < self.min_interval:
+        if duplicate or now - self.last_accept_time < self.min_interval:
             self.drop_count += 1
             return
-        self.last_points[opcode] = (x, y, z)
-        self.last_accept_times[opcode] = now
-        frame = pack_waypoint_frame(x, y, z, opcode)
+        self.last_goal = (x, y, z)
+        self.last_accept_time = now
+        frame = pack_waypoint_frame(x, y, z, OP_FINAL_GOAL)
         try:
             self.outbound.put_nowait(frame)
         except queue.Full:
@@ -91,8 +83,8 @@ class WaypointSender(Node):
                 self.outbound.put_nowait(frame)
             except queue.Empty:
                 pass
-        self.get_logger().info('%s queued: x=%.3f y=%.3f z=%.3f' %
-                               (label, x, y, z))
+        self.get_logger().info(
+            'final goal queued: x=%.3f y=%.3f z=%.3f' % (x, y, z))
 
     def send_loop(self):
         while not self.closed.is_set():
@@ -109,7 +101,7 @@ class WaypointSender(Node):
                 with self.connection_lock:
                     self.connection = connection
                 self.get_logger().info(
-                    'connected to Go2 waypoint channel %s:%d' % (self.host, self.port))
+                    'connected to Go2 goal channel %s:%d' % (self.host, self.port))
             try:
                 frame = self.outbound.get(timeout=0.5)
             except queue.Empty:
@@ -117,9 +109,9 @@ class WaypointSender(Node):
             try:
                 connection.sendall(frame)
                 self.sent_count += 1
-                self.get_logger().info('waypoint sent to Go2')
+                self.get_logger().info('final goal sent to Go2')
             except OSError as error:
-                self.get_logger().warn('waypoint send failed: %s' % error)
+                self.get_logger().warn('final goal send failed: %s' % error)
                 self.disconnect(connection)
 
     def disconnect(self, connection):
@@ -130,7 +122,7 @@ class WaypointSender(Node):
             connection.close()
         except OSError:
             pass
-        self.get_logger().info('Go2 waypoint channel disconnected')
+        self.get_logger().info('Go2 goal channel disconnected')
 
     def report_status(self):
         with self.connection_lock:
