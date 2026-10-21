@@ -29,21 +29,26 @@ The upstream `pathFollower` retains `pathInit=true` after receiving a local path
 Without a path timeout it can continue issuing motion requests based on stale
 path data across Damping/Stand transitions.
 
-### Mitigation now deployed
+### Current status
 
-The original upstream FAR/local-planner sources remain unchanged. The integration
-layer now remaps `pathFollower` output to `/nav/path_follower_request` and routes it
-through `nav_dog/nav_safety_gate.py` before `/api/sport/request`. The gate starts
-disarmed and requires stationary IMU calibration, a new initial pose, confirmed
-localization, fresh odometry, a Goalpoint, an FAR waypoint and a local path
-generated for that goal. The position/yaw match is a one-time acquisition check,
-not a 5 m leash on the whole run. A Goalpoint or waypoint remains valid until the
-goal changes. A new initial pose clears old goals and paths; stale odometry, IMU
-or localPlanner path immediately revokes Move authorization and emits StopMove.
+The running system uses the original upstream
+`jizhang-cmu/autonomy_stack_go2` FAR/local-planner implementation. This
+repository documents the issue but does not vendor or replace those planner
+sources.
 
-See `docs/导航安全门控与初始化流程_20261021.md`. This mitigation is covered by unit
-tests and an isolated ROS-domain integration test. It still requires repeated real
-robot acceptance testing before unattended operation.
+### Required fix before unattended operation
+
+Before unattended operation, verify that the deployed upstream planner revision
+provides, or that the integration layer enforces:
+
+- waypoint reception and active-goal state;
+- local-path frame validation and minimum path length;
+- path and odometry freshness timeouts;
+- one-shot `StopMove` when the path, goal or odometry becomes stale;
+- bounded waypoint speed and yaw rate.
+
+Until those safety conditions are deployed and verified, do not let the robot enter
+locomotion mode while a stale FAR goal or local path may exist.
 
 ## 2. `nav2_costmap` can crash during relocation
 

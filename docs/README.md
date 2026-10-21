@@ -8,7 +8,6 @@
 | [Go2_Mid360_SLAM_操作手册.md](../Go2_Mid360_SLAM_操作手册.md) | Mapping and SLAM operation guide |
 | [Go2点选导航_配置说明.md](../Go2点选导航_配置说明.md) | FAR point-to-point navigation setup |
 | [点云质量判定.md](../点云质量判定.md) | Point-cloud quality criteria |
-| [导航安全门控与初始化流程_20261021.md](导航安全门控与初始化流程_20261021.md) | Fail-closed Goalpoint gate, initialization order and tests |
 | [KNOWN_ISSUES.md](KNOWN_ISSUES.md) | Open safety and integration issues |
 
 ## Measurements
