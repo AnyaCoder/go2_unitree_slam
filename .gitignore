@@ -1,28 +1,57 @@
-# IDE
-.vscode
-.idea
+# ---------------------------------------------------------------------------
+# Build and generated ROS artifacts
+# ---------------------------------------------------------------------------
+/build/
+/install/
+/log/
+**/.colcon/
+**/CMakeFiles/
+**/CMakeCache.txt
+**/compile_commands.json
+**/CMakeUserPresets.json
+**/.ninja_deps
+**/.ninja_log
+**/*.ninja
 
-# cpp
-build
-install
-log
+# IDE, editor and OS debris
+**/.vscode/
+**/.idea/
+**/.cache/
+**/.DS_Store
+**/Thumbs.db
+**/*.swp
+**/*.swo
+**/*~
+**/*.bak
+**/*.bak-*
+**/*.orig
+**/*.rej
 
-#cland
-.cache
-
-# Python bytecode
-__pycache__/
-*.py[cod]
+# Python and test artifacts
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/.coverage
+**/htmlcov/
+**/.tox/
+**/.venv/
+**/venv/
+**/node_modules/
+**/dist/
 
 # Local build workspaces and external checkouts
 /nav_dog_ws/
 /unitree_slam/
 
 # Generated maps and map-editing sessions
+# Keep exactly one canonical navigation map in version control.
 /*.pcd
 !/GlobalMap_clean_20261020_1920_nav_green_edited.pcd
 /map_edit_*/
 /*.png
+/*.ply
 
 # Scratch measurements and one-off dumps
 /drift_baseline.txt
@@ -30,13 +59,19 @@ __pycache__/
 /terrainAnalysis.yaml
 /*_apply.json
 
-# Editor and patch debris
-*.bak
-*.bak-*
-*.orig
-*.rej
-*.swp
-*~
+# Runtime data and crash dumps
+**/*.log
+**/*.bag
+**/*.bag.*
+**/*.db3
+**/*.mcap
+**/*.sqlite3
+**/*.pid
+**/*.tmp
+/core
+/core.*
+**/core.[0-9]*
 
-# Runtime logs
-*.log
+# Local secrets
+**/.env
+!**/.env.example
