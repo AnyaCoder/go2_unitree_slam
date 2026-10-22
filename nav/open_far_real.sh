@@ -25,7 +25,8 @@ export DISPLAY="${DISPLAY:-:0}"
 
 if [[ -z "${XAUTHORITY:-}" ]]; then
   if [[ -f "/run/user/$(id -u)/gdm/Xauthority" ]]; then
-    export XAUTHORITY="/run/user/$(id -u)/gdm/Xauthority"
+    XAUTHORITY="/run/user/$(id -u)/gdm/Xauthority"
+    export XAUTHORITY
   elif [[ -f "${HOME}/.Xauthority" ]]; then
     export XAUTHORITY="${HOME}/.Xauthority"
   fi
@@ -53,7 +54,7 @@ if ! grep -qx '/state_estimation' <<<"$topics"; then
   echo "警告：当前未发现 /state_estimation 话题，Go2 位姿可能尚未就绪。" >&2
 fi
 if ! grep -qx '/viz_path_topic' <<<"$topics"; then
-  echo "警告：当前未发现 /viz_path_topic；确认电脑端 pcdMapSim/terrain/FAR 已启动且已收到 Goalpoint。" >&2
+  echo "警告：当前未发现狗端转发来的 /viz_path_topic；确认狗端 FAR 已启动且已完成 Goalpoint。" >&2
 fi
 
 # 正式配置已关闭点云 Decay，避免 AMDGPU + Ogre 1.12 持续分配

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Remove the UnitreeSlam legacy motion-control chain while preserving
-# UnitreeSlam, Livox, LIO/relocalization, localPlanner and pathFollower.
+# UnitreeSlam, Livox, LIO/relocalization and the project navigation stack.
 # The physical remote controller and Unitree low-level services are untouched.
 set -euo pipefail
 
@@ -34,24 +34,35 @@ def patch(path, old, new, marker, label):
     return path.read_text()
 
 reloc = Path("/unitree/module/graph_pid_ws/src/QT_Server/shell/re_location.sh")
+mapping_script = Path("/unitree/module/graph_pid_ws/src/QT_Server/shell/mapping.sh")
 launch_paths = [
     Path("/unitree/module/graph_pid_ws/src/task/launch/navigation_without_nav2_qt_test.launch.py"),
     Path("/unitree/module/graph_pid_ws/install/task/share/task/launch/navigation_without_nav2_qt_test.launch.py"),
 ]
+mapping_launch_paths = [
+    Path("/unitree/module/graph_pid_ws/src/task/launch/mapping_qt_test.launch.py"),
+    Path("/unitree/module/graph_pid_ws/install/task/share/task/launch/mapping_qt_test.launch.py"),
+    Path("/unitree/module/graph_pid_ws/src/task/launch/mapping.launch.py"),
+    Path("/unitree/module/graph_pid_ws/install/task/share/task/launch/mapping.launch.py"),
+]
 
-patch(
-    reloc,
-    "{\nros2 run go2_control_by_sdk send_cmd\n}&\n",
-    (
-        "# FAR-only mode: legacy motion command bridge is intentionally disabled.\n"
-        "# Re-enable only when running the original UnitreeSlam navigation stack.\n"
-        "# {\n"
-        "# ros2 run go2_control_by_sdk send_cmd\n"
-        "# }&\n"
-    ),
-    "legacy motion command bridge is intentionally disabled",
-    "re_location.sh: disabled go2_control_by_sdk send_cmd",
-)
+for script, label in (
+    (reloc, "re_location.sh"),
+    (mapping_script, "mapping.sh"),
+):
+    patch(
+        script,
+        "{\nros2 run go2_control_by_sdk send_cmd\n}&\n",
+        (
+            "# FAR-only mode: legacy motion command bridge is intentionally disabled.\n"
+            "# Re-enable only when running the original UnitreeSlam navigation stack.\n"
+            "# {\n"
+            "# ros2 run go2_control_by_sdk send_cmd\n"
+            "# }&\n"
+        ),
+        "legacy motion command bridge is intentionally disabled",
+        f"{label}: disabled go2_control_by_sdk send_cmd",
+    )
 
 old_node = (
     "        Node(\n"
@@ -84,6 +95,45 @@ for launch in launch_paths:
 for launch, text in zip(launch_paths, launch_texts):
     compile(text, str(launch), "exec")
     print(f"launch syntax: OK {launch}")
+
+mapping_old_node = (
+    "    dog_control = launch_ros.actions.Node(\n"
+    "        package='dog_control',\n"
+    "        executable='dog_control_B1_one',\n"
+    "        name='dog_control',\n"
+    "        output='screen'\n"
+    "        )\n"
+)
+mapping_new_node = (
+    "    # FAR-only mapping: LIO may run, but the legacy dog_control motion\n"
+    "    # chain must never publish competing motion commands.\n"
+    "    # dog_control = launch_ros.actions.Node(\n"
+    "    #     package='dog_control',\n"
+    "    #     executable='dog_control_B1_one',\n"
+    "    #     name='dog_control',\n"
+    "    #     output='screen'\n"
+    "    #     )\n"
+)
+for launch in mapping_launch_paths:
+    if not launch.exists():
+        continue
+    text = patch(
+        launch,
+        mapping_old_node,
+        mapping_new_node,
+        "FAR-only mapping: LIO may run",
+        f"{launch}: disabled dog_control_B1_one",
+    )
+    launch_nodes = "        dog_control,\n"
+    if launch_nodes in text:
+        text = text.replace(
+            launch_nodes,
+            "        # dog_control,\n",
+            1,
+        )
+        launch.write_text(text)
+    compile(text, str(launch), "exec")
+    print(f"launch syntax: OK {launch}")
 PY
 
 # Stop only the legacy motion-control processes. Keep the launch parent because
@@ -103,7 +153,7 @@ ps -eo pid,ppid,args |
 
 echo "--- required processes still alive ---"
 ps -eo pid,ppid,args |
-  grep -E '[U]nitreeSlam|[l]io_sam_ros2|[l]ivox_lidar_publisher|[l]ocalPlanner|[p]athFollower|[f]ar_viz_link|[f]ar_command_link|[i]nitialpose_link' |
+  grep -E '[U]nitreeSlam|[l]io_sam_ros2|[l]ivox_lidar_publisher|[t]errainAnalysis|[f]ar_planner|[l]ocalPlanner|[p]athFollower|[f]ar_viz_link|[i]nitialpose_link' |
   head -n 100 ||
   true
 REMOTE
