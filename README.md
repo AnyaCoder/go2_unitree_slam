@@ -8,7 +8,7 @@ Unitree Go2 EDU + Livox MID-360 navigation integration built on the upstream
 The Go2 owns the complete planning and execution loop:
 
 ```text
-LIO IMU odom (~157 Hz) + global localization (~3 Hz)
+LIO global relocalization (~3 Hz)
   -> nav_pose_bridge -> /nav/state_estimation (~50 Hz)
 
 fixed navigation PCD
@@ -33,11 +33,12 @@ The laptop must not run `pcdMapSim`, `terrainAnalysis`, `terrainAnalysisExt`,
 `far_planner`, `localPlanner`, or `pathFollower`. No live sensor cloud is sent
 to the laptop.
 
-`nav_pose_bridge` keeps LIO's low-rate global correction while propagating the
-existing 157 Hz IMU odometry at 50 Hz for the onboard planners. The display
-uplink is independently limited to 30 Hz state, 20 Hz joints and 1 Hz heavy
-FAR Marker topics, and keeps only the newest pending frame per topic so a slow
-Wi-Fi link cannot replay stale poses. Planning does not consume the Livox scan:
+`nav_pose_bridge` treats LIO's relocalization odometry as the only pose source
+and repeats its newest value at 50 Hz for the onboard planners. The
+IMU-preintegration topic is deliberately excluded because it drifts while the
+Go2 is stationary. The display uplink is independently limited to 30 Hz state,
+20 Hz joints and 1 Hz heavy FAR Marker topics, and keeps only the newest pending
+frame per topic so a slow Wi-Fi link cannot replay stale poses. Planning does not consume the Livox scan:
 `static_map_replay` reproduces the accepted `map_sim` input exactly from the
 fixed navigation PCD (deterministic 0.08 m voxel, 6 m x 6 m window, 5 Hz).
 Terrain classification also uses the `map_sim` parameters, including
@@ -59,7 +60,7 @@ GlobalMap_clean_20261020_1920_nav_green_edited.pcd
 ## Repository layout
 
 - `nav/`: laptop display, RViz, acceptance checks and operator entry points.
-- `nav_dog/`: pose fusion, fixed-PCD replay, rate audit and TCP bridges run on
+- `nav_dog/`: pose relay, fixed-PCD replay, rate audit and TCP bridges run on
   the Go2.
 - `nav_dog_cpp/`: optional C++ live-cloud adapter; disabled in the accepted
   fixed-PCD configuration.

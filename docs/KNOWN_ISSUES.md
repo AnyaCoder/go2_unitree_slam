@@ -51,13 +51,15 @@ Real-time point-cloud upload is intentionally unsupported.
 ## 5. LIO output rate is decoupled from navigation state rate
 
 LIO-SAM global localization runs at about 3 Hz on the Go2. The planner must not
-consume that topic directly. `nav_pose_bridge` combines it with the existing
-IMU preintegration odometry and publishes a 50 Hz map-frame state. The deskewed
-10 Hz cloud is used for LIO. The fixed-PCD replay uses the fused state to emit
+consume that topic directly. `nav_pose_bridge` treats it as the authoritative
+pose and repeats the newest value at 50 Hz. The IMU-preintegration odometry is
+not used: measured while the Go2 was stationary, it continued to drift and made
+`/nav/state_estimation` move by more than a metre. The deskewed 10 Hz cloud is
+used for LIO. The fixed-PCD replay uses the published map-frame state to emit
 the simulator's 5 Hz planning cloud.
 
 If `/nav/state_estimation` disappears or `/stop` becomes 15, do not bypass the
-bridge; first restore global localization and high-rate IMU odometry. Use
+bridge; first restore global relocalization. Use
 `./nav/audit_real_rates.sh --duration 15 --strict` to distinguish a source-rate
 problem from a bridge, static-replay, or planner-rate problem.
 
