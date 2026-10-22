@@ -12,6 +12,11 @@ HOST="${FAR_VIZ_HOST:-go2-wifi}"
 STATIC_MAP="${GO2_STATIC_MAP:-${ROOT}/GlobalMap_clean_20261020_1920_nav_green_edited.pcd}"
 REMOTE_MAP="/home/unitree/go2_nav/maps/$(basename "$STATIC_MAP")"
 FORCE_STATIC_MAP_SYNC="${GO2_FORCE_STATIC_MAP_SYNC:-0}"
+STATE_PORT="${FAR_VIZ_PORT:-8898}"
+COMMAND_PORT="${FAR_COMMAND_PORT:-8899}"
+INITIALPOSE_PORT="${GO2_INITIALPOSE_PORT:-8900}"
+GOAL_ENABLE="${GO2_GOAL_ENABLE:-${FAR_COMMAND_ENABLE:-1}}"
+INITIALPOSE_ENABLE="${GO2_INITIALPOSE_ENABLE:-1}"
 # shellcheck source=../nav_dog/go2_mid360_hardware.env
 source "${ROOT}/nav_dog/go2_mid360_hardware.env"
 
@@ -134,7 +139,77 @@ fi
 echo 'PASS  没有旧 global_path_receiver / 第二套全局路径'
 
 echo
-echo '[7/8] 检查运动控制权唯一性'
+echo '[7/8] 启动狗端状态/FAR/Goalpoint/InitialPose 下行桥并检查控制权'
+scp -q \
+  "${ROOT}/nav_dog/far_viz_protocol.py" \
+  "${ROOT}/nav_dog/far_viz_link.py" \
+  "${ROOT}/nav_dog/run_far_viz_link.sh" \
+  "${ROOT}/nav_dog/lowstate/live_robot_state.py" \
+  "${ROOT}/nav_dog/lowstate/run_joint_bridge.sh" \
+  "${ROOT}/nav_dog/far_command_protocol.py" \
+  "${ROOT}/nav_dog/far_command_link.py" \
+  "${ROOT}/nav_dog/run_far_command_link.sh" \
+  "${ROOT}/nav_dog/go2_mid360_hardware.env" \
+  "${ROOT}/nav_dog/initialpose_protocol.py" \
+  "${ROOT}/nav_dog/initialpose_link.py" \
+  "${ROOT}/nav_dog/run_initialpose_link.sh" \
+  "$HOST:/home/unitree/go2_nav/"
+ssh "$HOST" \
+  "FAR_VIZ_PORT='$STATE_PORT' FAR_COMMAND_PORT='$COMMAND_PORT' \
+   GOAL_ENABLE='$GOAL_ENABLE' GO2_INITIALPOSE_PORT='$INITIALPOSE_PORT' \
+   GO2_INITIALPOSE_ENABLE='$INITIALPOSE_ENABLE' bash -s" <<'REMOTE'
+set -e
+chmod +x \
+  /home/unitree/go2_nav/far_viz_link.py \
+  /home/unitree/go2_nav/run_far_viz_link.sh \
+  /home/unitree/go2_nav/live_robot_state.py \
+  /home/unitree/go2_nav/run_joint_bridge.sh \
+  /home/unitree/go2_nav/far_command_link.py \
+  /home/unitree/go2_nav/run_far_command_link.sh \
+  /home/unitree/go2_nav/initialpose_link.py \
+  /home/unitree/go2_nav/run_initialpose_link.sh
+pkill -TERM -f '^python3 /home/unitree/go2_nav/live_robot_state.py ros' 2>/dev/null || true
+pkill -TERM -f '/home/unitree/go2_nav/far_viz_link.py' 2>/dev/null || true
+pkill -TERM -f '/home/unitree/go2_nav/far_command_link.py' 2>/dev/null || true
+pkill -TERM -f '/home/unitree/go2_nav/initialpose_link.py' 2>/dev/null || true
+sleep 0.5
+if ! curl -fsS --max-time 3 http://192.168.123.18:8766/state.json >/dev/null; then
+  echo 'WARN Go2 lowstate HTTP source unavailable; joint model may be static' >&2
+fi
+nohup /home/unitree/go2_nav/run_joint_bridge.sh \
+  >/tmp/go2_joint_bridge.log 2>&1 </dev/null &
+nohup env FAR_VIZ_PORT="$FAR_VIZ_PORT" \
+  /home/unitree/go2_nav/run_far_viz_link.sh \
+  >/tmp/far_viz_link.log 2>&1 </dev/null &
+if [[ "$GOAL_ENABLE" != "0" ]]; then
+  nohup env FAR_COMMAND_PORT="$FAR_COMMAND_PORT" \
+    /home/unitree/go2_nav/run_far_command_link.sh \
+    >/tmp/far_command_link.log 2>&1 </dev/null &
+fi
+if [[ "$GO2_INITIALPOSE_ENABLE" != "0" ]]; then
+  nohup env GO2_INITIALPOSE_PORT="$GO2_INITIALPOSE_PORT" \
+    /home/unitree/go2_nav/run_initialpose_link.sh \
+    >/tmp/initialpose_link.log 2>&1 </dev/null &
+fi
+REMOTE
+
+wait_remote_port() {
+  local port="$1" label="$2" i
+  for ((i = 1; i <= 20; i++)); do
+    if ssh -n -o ConnectTimeout=5 -o BatchMode=yes "$HOST" \
+        "ss -ltn 2>/dev/null | grep -q ':$port '"; then
+      echo "PASS  $label :$port"
+      return 0
+    fi
+    sleep 0.5
+  done
+  echo "FAIL  等待 $label :$port 超时" >&2
+  return 1
+}
+wait_remote_port "$STATE_PORT" 'FAR/状态桥'
+wait_remote_port "$COMMAND_PORT" 'Goalpoint 下行桥'
+wait_remote_port "$INITIALPOSE_PORT" 'InitialPose 下行桥'
+
 if [[ -n "$(ssh "$HOST" "ps -eo args | grep -E '[d]og_control_B1_one|[g]o2_control_by_sdk.*send_cmd' || true")" ]]; then
   echo 'FAIL  检测到 UnitreeSlam 旧运动控制节点，拒绝继续' >&2
   exit 6

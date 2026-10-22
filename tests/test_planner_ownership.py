@@ -130,6 +130,17 @@ def test_start_script_deploys_new_chain_and_rejects_legacy_owners():
     assert '[g]o2_control_by_sdk.*send_cmd' in startup
 
 
+def test_start_script_starts_dog_view_bridges_and_checks_ports():
+    startup = active_lines('nav/start_far_real.sh')
+    for filename in ('far_viz_link.py', 'far_command_link.py',
+                     'initialpose_link.py', 'run_far_viz_link.sh',
+                     'run_far_command_link.sh', 'run_initialpose_link.sh'):
+        assert filename in startup
+    assert 'wait_remote_port' in startup
+    assert 'FAR_VIZ_PORT' in startup
+    assert '8898' in startup or 'STATE_PORT' in startup
+
+
 def test_goalpoint_replaces_global_path_transport():
     view = active_lines('nav/view_real.sh')
     assert 'nav/goal_sender.py' in view
