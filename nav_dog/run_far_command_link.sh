@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
-# LEGACY / NOT STARTED: the final chain uses run_global_path_receiver.sh.
-# This launcher is retained for historical reference only and must not run.
+# Laptop final Goalpoint -> Go2 /goal_point. No waypoint or velocity input.
 set -euo pipefail
-echo 'LEGACY: use /home/unitree/go2_nav/run_global_path_receiver.sh instead' >&2
-exit 2
+set +u
+source /opt/ros/foxy/setup.bash
+source /unitree/module/graph_pid_ws/install/local_setup.bash
+source /home/unitree/autonomy_stack_go2/install/setup.bash
+set -u
+export LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH:-}
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+export ROS_LOCALHOST_ONLY=0
+export FAR_COMMAND_ENABLE="${FAR_COMMAND_ENABLE:-1}"
+export FAR_COMMAND_PORT="${FAR_COMMAND_PORT:-8899}"
+exec python3 /home/unitree/go2_nav/far_command_link.py --port "$FAR_COMMAND_PORT"

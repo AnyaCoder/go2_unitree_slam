@@ -4,8 +4,8 @@
 用法（在狗上，先 source 好 ROS 环境、导航已启动）：
     python3 /home/unitree/go2_nav/check_upstream_params.py
 
-只报差异。sensorOffsetX/Y 与 pathFolder 属于必须按本机硬件/路径变化的三项，
-单独列出来供确认，不计为错误。
+只报差异。sensorOffsetX/Y、maxSpeed、NaN 启动目标、点云超时和 FAR
+轮廓余量属于本机明确覆盖项，单独列出，不计为错误。
 """
 import importlib.util
 import os
@@ -20,17 +20,21 @@ spec = importlib.util.spec_from_file_location(
 launch_mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(launch_mod)
 
+LOCAL_OVERRIDES = {'autonomyMode': 'true', 'maxSpeed': '0.5'}
 TARGETS = [
-    ('/localPlanner', 'local_planner', 'local_planner.launch', 'localPlanner', None),
-    ('/pathFollower', 'local_planner', 'local_planner.launch', 'pathFollower',
-     {'sport_request_topic': '/api/sport/request', 'pathFollowerGoalTopic': '/goal_point'}),
-    ('/terrainAnalysis', 'terrain_analysis', 'terrain_analysis.launch', 'terrainAnalysis', None),
-    ('/terrainAnalysisExt', 'terrain_analysis_ext', 'terrain_analysis_ext.launch',
-     'terrainAnalysisExt', {'checkTerrainConn': 'true'}),
+    ('/terrainAnalysis', 'terrain_analysis', 'terrain_analysis.launch',
+     'terrainAnalysis', {}),
+    ('/terrainAnalysisExt', 'terrain_analysis_ext',
+     'terrain_analysis_ext.launch', 'terrainAnalysisExt',
+     {'checkTerrainConn': 'true'}),
+    ('/localPlanner', 'local_planner', 'local_planner.launch',
+     'localPlanner', LOCAL_OVERRIDES),
+    ('/pathFollower', 'local_planner', 'local_planner.launch',
+     'pathFollower', LOCAL_OVERRIDES),
 ]
 
-OVERRIDE_KEYS = ('sensorOffsetX', 'sensorOffsetY', 'pathFolder', 'maxSpeed',
-                 'goalX', 'goalY')
+OVERRIDE_KEYS = ('sensorOffsetX', 'sensorOffsetY', 'maxSpeed', 'goalX',
+                 'goalY', 'collisionCloudTimeout')
 
 
 def dump(node):

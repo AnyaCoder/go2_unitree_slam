@@ -1,28 +1,29 @@
 #!/usr/bin/env python3
-"""Go2 点选导航：参数直接取自 autonomy_stack_go2 上游 launch，不另立一套。
+"""Go2 full navigation stack, using the installed upstream ROS 2 launch files.
 
-做法：运行时解析上游 launch XML（local_planner.launch / terrain_analysis.launch /
-terrain_analysis_ext.launch）里的 <arg>/<param>/<remap>，原样传给节点。
-这里的数值就等于上游默认值（含 $(var ...) 展开），上游改了参数我们也自动跟随，
-不会出现"手抄一份参数"慢慢漂移的问题。
+The Go2 owns the complete planning and execution loop:
 
-相对上游 system_real_robot_with_route_planner.launch，本文件只做四项适配：
-  1. 用 LIO-SAM 替换 Point-LIO：/state_estimation、/registered_scan 重映射到
-     /lio_sam_ros2/mapping/{re_location_odometry,cloud_registered}；
-     far_planner 的 /odom_world 直接接真实里程计，避免 ROS2 多级 remap 不串联
-  2. 暴露 sensorOffsetX/Y：唯一真正取决于硬件安装位置的量。上游 0.3/0.0
-     是 L1 前置安装值；本机使用 Livox MID-360 头颈倾斜安装，默认
-     0.16143/0.0，并通过 go2_mid360_hardware.env 统一供给
-  3. 先把 cloud_registered 从 odom 转到 map 并过滤狗体回波，再交给
-     terrainAnalysis/localPlanner；TF 不可用时宁可丢帧也不转发错误坐标
-  4. 最终架构中全局 FAR 在电脑固定地图上运行；狗端只运行 terrain 和
-     localPlanner/pathFollower。global_path_receiver 是公共 /way_point 的
-     唯一发布者。本 launch 保留 start_far 仅为隔离调试，生产启动必须为 false
+    LIO IMU odom + global correction -> nav_pose_bridge -> 50 Hz map pose
+    fixed navigation PCD -> static_map_replay -> 5 Hz rolling map terrain
+                    -> terrainAnalysis -> terrainAnalysisExt
+                    -> FAR -> /way_point -> localPlanner -> /path
+                    -> pathFollower -> /api/sport/request
 
-不启动（与上游一致或本机不需要）：joy_node（狗上没有 /dev/input/js0）、
-point_lio_unilidar（已由 LIO-SAM 取代）、rviz2、
-go2_camera_bridge（相机桥由其它服务占用）、/sensor -> /vehicle 静态 TF
-（规划链只看 /state_estimation，不看 TF）。
+The laptop is display-only. It receives low-rate state and FAR visualization
+messages over TCP 8898 and sends only the operator's final /goal_point over TCP
+8899. UnitreeSlam legacy motion controllers are disabled outside this launch.
+
+The only deliberate upstream adaptations are:
+  * LIO-SAM supplies pose and relocalization; it is not a terrain input.
+  * nav_pose_bridge propagates 3 Hz global localization at 50 Hz using the
+    existing IMU preintegration odometry.
+  * static_map_replay emits fixed-PCD rolling terrain: 0.08 m voxel,
+    6 m x 6 m window, 5 Hz map-frame XYZI clouds.
+  * Terrain classification uses map_sim's exact values, not the upstream
+    real-robot defaults.
+  * MID-360 sensorOffsetX/Y replace the upstream L1 mounting defaults.
+  * localPlanner starts with NaN goals so relocalization cannot trigger motion.
+  * pathFollower tolerates the real robot's approximately 1 Hz collision cloud.
 """
 import os
 import xml.etree.ElementTree as ET
@@ -34,18 +35,21 @@ from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
-ODOM_TOPIC = '/lio_sam_ros2/mapping/re_location_odometry'
-CLOUD_TOPIC = '/lio_sam_ros2/mapping/cloud_registered'
+HIGH_RATE_ODOM_TOPIC = '/odometry/imu_incremental'
+GLOBAL_ODOM_TOPIC = '/lio_sam_ros2/mapping/re_location_odometry'
+NAV_STATE_TOPIC = '/nav/state_estimation'
+RAW_CLOUD_TOPIC = '/lio_sam_ros2/deskew/cloud_deskewed'
 FILTERED_CLOUD_TOPIC = '/nav/cloud_registered_map'
+STATIC_CLOUD_TOPIC = '/nav/static_cloud_map'
+DEFAULT_STATIC_MAP = (
+    '/home/unitree/go2_nav/maps/'
+    'GlobalMap_clean_20261020_1920_nav_green_edited.pcd')
 FAR_CONTOUR_PADDING_M = 0.12
+SIM_TERRAIN_VEHICLE_HEIGHT = 0.45
 
 
 def _subst(text, args):
-    """展开 $(var name) / $(find-pkg-share pkg)。
-
-    若整段文本就是一个 $(var x)，原样返回 args 里的对象，
-    这样 LaunchConfiguration 能一路传到 remap / param 里。
-    """
+    """Expand $(var name) and $(find-pkg-share pkg) in upstream launch XML."""
     if text is None:
         return None
     out = text
@@ -57,13 +61,13 @@ def _subst(text, args):
         name = out[start + 6:end].strip()
         value = args[name]
         if start == 0 and end == len(out) - 1:
-            return value                      # 保持 LaunchConfiguration 类型
+            return value
         out = out[:start] + str(value) + out[end + 1:]
     while '$(find-pkg-share ' in out:
         start = out.index('$(find-pkg-share ')
         end = out.index(')', start)
-        pkg = out[start + 17:end].strip()
-        out = out[:start] + get_package_share_directory(pkg) + out[end + 1:]
+        package = out[start + 17:end].strip()
+        out = out[:start] + get_package_share_directory(package) + out[end + 1:]
     return out
 
 
@@ -83,11 +87,11 @@ def _typed(value):
 
 
 def read_upstream(pkg, launch_name, exec_name, override_args=None):
-    """返回上游同名节点的 (params, remappings)。"""
+    """Return one upstream node's parameters and remappings."""
     path = get_package_share_directory(pkg) + '/launch/' + launch_name
     root = ET.parse(path).getroot()
-
-    args = {a.get('name'): a.get('default', '') for a in root.findall('arg')}
+    args = {item.get('name'): item.get('default', '')
+            for item in root.findall('arg')}
     if override_args:
         args.update(override_args)
 
@@ -96,20 +100,20 @@ def read_upstream(pkg, launch_name, exec_name, override_args=None):
         if node.get('exec') != exec_name:
             continue
         for param in node.findall('param'):
-            if param.get('from'):             # 外部 yaml 由调用方处理
+            if param.get('from'):
                 continue
             params[param.get('name')] = _typed(_subst(param.get('value'), args))
         for remap in node.findall('remap'):
             remaps.append((_subst(remap.get('from'), args),
                            _subst(remap.get('to'), args)))
     if not params:
-        raise RuntimeError('%s 里没找到节点 %s 的参数' % (path, exec_name))
+        raise RuntimeError('%s has no node %s' % (path, exec_name))
     return params, remaps
 
 
 def lio_remaps(cloud_topic, *extra):
-    """把上游输入接到 LIO-SAM 位姿和已校验的 map-frame 点云。"""
-    return [('/state_estimation', ODOM_TOPIC),
+    """Connect upstream terrain/local nodes to the fused map-frame state."""
+    return [('/state_estimation', NAV_STATE_TOPIC),
             ('/registered_scan', cloud_topic)] + list(extra)
 
 
@@ -120,81 +124,176 @@ def generate_launch_description():
     max_speed = LaunchConfiguration('max_speed')
     start_far = LaunchConfiguration('start_far')
     start_cloud_filter = LaunchConfiguration('start_cloud_filter')
+    start_pose_bridge = LaunchConfiguration('start_pose_bridge')
+    start_static_replay = LaunchConfiguration('start_static_replay')
+    static_map_path = LaunchConfiguration('static_map_path')
     cloud_topic = LaunchConfiguration('cloud_topic')
 
     planner_params, _ = read_upstream(
         'local_planner', 'local_planner.launch', 'localPlanner',
         {'autonomyMode': 'true', 'maxSpeed': max_speed})
-    # Upstream autonomyMode defaults goalX/goalY to (0, 0), which makes a newly
-    # relocalized robot drive toward the map origin before any operator input.
-    # NaN suppresses path generation until global_path_receiver publishes a
-    # finite hold pose or a real look-ahead target.
+    # Upstream autonomyMode defaults to (0, 0). A fresh relocalization must not
+    # produce a path toward map origin before the operator sends a Goalpoint.
     planner_params['goalX'] = float('nan')
     planner_params['goalY'] = float('nan')
+
     follower_params, follower_remaps = read_upstream(
         'local_planner', 'local_planner.launch', 'pathFollower',
         {'autonomyMode': 'true', 'maxSpeed': max_speed})
+    follower_params['collisionCloudTimeout'] = 2.0
     follower_remaps += [('/api/sport/request', sport_out)]
-    terrain_params, _ = read_upstream(
-        'terrain_analysis', 'terrain_analysis.launch', 'terrainAnalysis')
-    terrain_ext_params, _ = read_upstream(
-        'terrain_analysis_ext', 'terrain_analysis_ext.launch', 'terrainAnalysisExt',
-        {'checkTerrainConn': 'true'})         # 上游 system_real_robot 传的就是 true
+
+    # Keep this block byte-for-byte equivalent in meaning to map_sim's launch.
+    # The upstream real-robot launch uses vehicleHeight=1.5 and
+    # noDataObstacle=true, which produces a different terrain than the accepted
+    # simulation.
+    terrain_params = {
+        'scanVoxelSize': 0.05, 'decayTime': 2.0, 'noDecayDis': 0.0,
+        'clearingDis': 8.0, 'useSorting': True, 'quantileZ': 0.25,
+        'considerDrop': False, 'limitGroundLift': False,
+        'maxGroundLift': 0.15, 'clearDyObs': False,
+        'minDyObsDis': 0.3, 'minDyObsAngle': 0.0, 'minDyObsRelZ': -0.3,
+        'absDyObsRelZThre': 0.2, 'minDyObsVFOV': -16.0,
+        'maxDyObsVFOV': 16.0, 'minDyObsPointNum': 1,
+        'noDataObstacle': False, 'noDataBlockSkipNum': 0,
+        'minBlockPointNum': 10, 'maxElevBelowVeh': -0.6,
+        'noDataAreaMinX': 0.3, 'noDataAreaMaxX': 1.8,
+        'noDataAreaMinY': -0.9, 'noDataAreaMaxY': 0.9,
+        'vehicleHeight': SIM_TERRAIN_VEHICLE_HEIGHT,
+        'voxelPointUpdateThre': 100, 'voxelTimeUpdateThre': 2.0,
+        'minRelZ': -1.5, 'maxRelZ': 0.5, 'disRatioZ': 0.2,
+    }
+    terrain_ext_params = {
+        'scanVoxelSize': 0.1, 'decayTime': 10.0, 'noDecayDis': 0.0,
+        'clearingDis': 30.0, 'useSorting': True, 'quantileZ': 0.1,
+        'vehicleHeight': SIM_TERRAIN_VEHICLE_HEIGHT,
+        'voxelPointUpdateThre': 100, 'voxelTimeUpdateThre': 2.0,
+        'lowerBoundZ': -2.5, 'upperBoundZ': 1.0, 'disRatioZ': 0.1,
+        'checkTerrainConn': True, 'terrainConnThre': 0.5,
+        'terrainUnderVehicle': -0.75, 'ceilingFilteringThre': 2.0,
+        'localTerrainMapRadius': 4.0,
+    }
 
     sensor_params = {'sensorOffsetX': sensor_x, 'sensorOffsetY': sensor_y}
-    self_filter_script = os.path.join(os.path.dirname(__file__), 'self_filter.py')
-    cloud_filter = ExecuteProcess(
-        cmd=['python3', self_filter_script],
-        name='go2_cloud_frame_self_filter', output='screen',
-        condition=IfCondition(start_cloud_filter))
+    script_dir = os.path.dirname(__file__)
+    pose_bridge_script = os.path.join(script_dir, 'nav_pose_bridge.py')
+    static_map_script = os.path.join(script_dir, 'static_map_replay.py')
+    pose_bridge = ExecuteProcess(
+        cmd=[
+            'python3', pose_bridge_script, '--ros-args',
+            '-p', 'high_rate_topic:=' + HIGH_RATE_ODOM_TOPIC,
+            '-p', 'global_topic:=' + GLOBAL_ODOM_TOPIC,
+            '-p', 'output_topic:=' + NAV_STATE_TOPIC,
+        ],
+        name='go2_nav_pose_bridge',
+        output='screen',
+        condition=IfCondition(start_pose_bridge),
+    )
+    static_replay = ExecuteProcess(
+        cmd=[
+            'python3', static_map_script,
+            '--map', static_map_path,
+            '--pose-topic', NAV_STATE_TOPIC,
+            '--output-topic', STATIC_CLOUD_TOPIC,
+            '--frame', 'map',
+            '--voxel', '0.08',
+            '--window-size', '6.0',
+            '--rate', '5.0',
+            '--pose-timeout', '1.0',
+        ],
+        name='go2_static_map_replay',
+        output='screen',
+        condition=IfCondition(start_static_replay),
+    )
+    cloud_filter = Node(
+        package='nav_dog_cpp', executable='cloud_to_map_filter',
+        name='cloud_to_map_filter', output='screen',
+        parameters=[{
+            'input_topic': RAW_CLOUD_TOPIC,
+            'output_topic': FILTERED_CLOUD_TOPIC,
+            'pose_topic': NAV_STATE_TOPIC,
+            'input_frame': 'base_link',
+            'target_frame': 'map',
+            'output_rate_hz': 5.0,
+            'self_radius': 0.70,
+            'self_z_band': 0.65,
+            'voxel_size': 0.08,
+            'pose_timeout': 0.40,
+        }],
+        condition=IfCondition(start_cloud_filter),
+    )
 
-    terrain = Node(package='terrain_analysis', executable='terrainAnalysis',
-                   name='terrainAnalysis', output='screen',
-                   parameters=[terrain_params], remappings=lio_remaps(cloud_topic))
+    terrain = Node(
+        package='terrain_analysis', executable='terrainAnalysis',
+        name='terrainAnalysis', output='screen',
+        parameters=[terrain_params], remappings=lio_remaps(cloud_topic))
+    terrain_ext = Node(
+        package='terrain_analysis_ext', executable='terrainAnalysisExt',
+        name='terrainAnalysisExt', output='screen',
+        parameters=[terrain_ext_params], remappings=lio_remaps(cloud_topic))
+    planner = Node(
+        package='local_planner', executable='localPlanner',
+        name='localPlanner', output='screen',
+        parameters=[planner_params, sensor_params],
+        remappings=lio_remaps(cloud_topic))
+    follower = Node(
+        package='local_planner', executable='pathFollower',
+        name='pathFollower', output='screen',
+        parameters=[follower_params, sensor_params],
+        remappings=lio_remaps(cloud_topic, *follower_remaps))
 
-    terrain_ext = Node(package='terrain_analysis_ext', executable='terrainAnalysisExt',
-                       name='terrainAnalysisExt', output='screen',
-                       parameters=[terrain_ext_params], remappings=lio_remaps(cloud_topic))
-
-    planner = Node(package='local_planner', executable='localPlanner',
-                   name='localPlanner', output='screen',
-                   parameters=[planner_params, sensor_params],
-                   remappings=lio_remaps(cloud_topic))
-
-    follower = Node(package='local_planner', executable='pathFollower',
-                    name='pathFollower', output='screen',
-                    parameters=[follower_params, sensor_params],
-                    remappings=lio_remaps(cloud_topic, *follower_remaps))
-
-    far = Node(package='far_planner', executable='far_planner', name='far_planner',
-               output='screen',
-               condition=IfCondition(start_far),
-               parameters=[
-                   get_package_share_directory('far_planner') + '/config/default.yaml',
-                   {'c_detector/contour_padding_m': FAR_CONTOUR_PADDING_M},
-               ],
-               remappings=[('/odom_world', ODOM_TOPIC),
-                           ('/terrain_cloud', '/terrain_map_ext'),
-                           ('/scan_cloud', '/terrain_map'),
-                           ('/terrain_local_cloud', cloud_topic),
-                           ('/way_point', '/far/way_point')])
+    far = Node(
+        package='far_planner', executable='far_planner', name='far_planner',
+        output='screen', condition=IfCondition(start_far),
+        parameters=[
+            os.path.join(
+                get_package_share_directory('far_planner'),
+                'config', 'default.yaml'),
+            {
+                'c_detector/contour_padding_m': FAR_CONTOUR_PADDING_M,
+                'is_pub_boundary': True,
+            },
+        ],
+        # FAR publishes /way_point directly. Do not introduce a second global
+        # path receiver or remap this topic away from localPlanner.
+        remappings=[
+            ('/odom_world', NAV_STATE_TOPIC),
+            ('/terrain_cloud', '/terrain_map_ext'),
+            ('/scan_cloud', '/terrain_map'),
+            ('/terrain_local_cloud', cloud_topic),
+        ])
 
     return LaunchDescription([
-        DeclareLaunchArgument('sport_out', default_value='/api/sport/request',
-                              description='运动指令话题；dry run 用 /nav/dry_cmd'),
-        DeclareLaunchArgument('sensor_offset_x', default_value='0.16143',
-                              description='Livox MID-360 头颈安装 x 偏移；可用实车测量值覆盖'),
-        DeclareLaunchArgument('sensor_offset_y', default_value='0.0'),
-        DeclareLaunchArgument('max_speed', default_value='0.5',
-                              description='真机线速度上限（m/s）'),
         DeclareLaunchArgument(
-            'start_cloud_filter', default_value='true',
-            description='把 cloud_registered 从 odom 转到 map 并删除自身回波'),
+            'sport_out', default_value='/api/sport/request',
+            description='运动指令话题；dry run 用 /nav/dry_cmd'),
         DeclareLaunchArgument(
-            'cloud_topic', default_value=FILTERED_CLOUD_TOPIC,
+            'sensor_offset_x', default_value='0.16143',
+            description='Livox MID-360 相对车体中心的 x 偏移'),
+        DeclareLaunchArgument(
+            'sensor_offset_y', default_value='0.0',
+            description='Livox MID-360 相对车体中心的 y 偏移'),
+        DeclareLaunchArgument(
+            'max_speed', default_value='0.5',
+            description='真机线速度上限（m/s）'),
+        DeclareLaunchArgument(
+            'start_pose_bridge', default_value='true',
+            description='把高频 IMU odom 与低频全局定位融合为 50 Hz 导航状态'),
+        DeclareLaunchArgument(
+            'start_static_replay', default_value='true',
+            description='用固定导航 PCD 生成 6 m x 6 m / 5 Hz 滚动点云'),
+        DeclareLaunchArgument(
+            'static_map_path', default_value=DEFAULT_STATIC_MAP,
+            description='狗端固定导航 PCD'),
+        DeclareLaunchArgument(
+            'start_cloud_filter', default_value='false',
+            description='可选旧模式：把 10 Hz deskew cloud 转到 map 并降到 5 Hz'),
+        DeclareLaunchArgument(
+            'cloud_topic', default_value=STATIC_CLOUD_TOPIC,
             description='terrain/localPlanner 消费的 map-frame 点云'),
         DeclareLaunchArgument(
-            'start_far', default_value='false',
-            description='仅隔离调试用；最终架构由电脑固定地图运行 FAR'),
-        cloud_filter, terrain, terrain_ext, planner, follower, far,
+            'start_far', default_value='true',
+            description='狗端启动完整 FAR 规划链'),
+        pose_bridge, static_replay, cloud_filter, terrain, terrain_ext,
+        planner, follower, far,
     ])
