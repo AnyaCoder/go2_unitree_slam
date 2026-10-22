@@ -2,13 +2,13 @@
 
 | Document | Purpose |
 |---|---|
-| [必看.md](../必看.md) | Mandatory architecture, startup chain and control ownership |
-| [真机SLAM冷启动与重定位成功流程_20261021.md](真机SLAM冷启动与重定位成功流程_20261021.md) | Cold start, relocation and acceptance procedure |
-| [真机RViz复刻模拟显示与全真链路.md](真机RViz复刻模拟显示与全真链路.md) | Required RViz layout and real-data display contract |
+| [必看.md](../必看.md) | Mandatory full-stack architecture and control ownership |
+| [真机SLAM冷启动与重定位成功流程_20261022.md](真机SLAM冷启动与重定位成功流程_20261022.md) | Cold start, relocation and Goalpoint operation |
+| [真机RViz复刻模拟显示与全真链路.md](真机RViz复刻模拟显示与全真链路.md) | Laptop display contract and dog-side planning data flow |
 | [Go2_Mid360_SLAM_操作手册.md](../Go2_Mid360_SLAM_操作手册.md) | Mapping and SLAM operation guide |
 | [Go2点选导航_配置说明.md](../Go2点选导航_配置说明.md) | FAR point-to-point navigation setup |
 | [点云质量判定.md](../点云质量判定.md) | Point-cloud quality criteria |
-| [KNOWN_ISSUES.md](KNOWN_ISSUES.md) | Open safety and integration issues |
+| [KNOWN_ISSUES.md](KNOWN_ISSUES.md) | Open integration issues |
 
 ## Measurements
 

@@ -1,71 +1,68 @@
 # Known Issues
 
-Updated: 2026-10-21
+Updated: 2026-10-22
 
-## 1. Stale local path can resume after Damping/Stand
+## 1. Fixed-PCD terrain and FAR run on the Go2
 
-### Symptom
+The current architecture deliberately runs the complete upstream loop on the
+robot:
 
-The Go2 is stationary in Damping mode. After the operator switches it back to a
-standing/locomotion mode, it can resume an old local path even though no new RViz
-goal was just sent.
+```text
+static_map_replay -> terrainAnalysis -> terrainAnalysisExt -> FAR
+-> localPlanner -> pathFollower
+```
 
-### Evidence
+`nav_dog/static_map_replay.py` reproduces the accepted `map_sim` input from the
+fixed navigation PCD: deterministic 0.08 m voxel, 6 m x 6 m rolling window, 5 Hz.
+It publishes only after receiving a pose less than one second old. The planning
+input and laptop background therefore come from the same PCD, not from a live
+scan. Use `./nav/audit_real_rates.sh` to verify `/nav/static_cloud_map`.
 
-- `localPlanner` publishes `/path`;
-- upstream `pathFollower` retains its last path state;
-- no fresh path may be generated at the instant of standing.
+The laptop is display-only. It must not start `pcdMapSim`, terrain, FAR,
+`localPlanner`, or `pathFollower`.
 
-### Root cause
+Verification must be performed with `./nav/check_real_chain.sh`. A green display
+alone does not prove that planning and execution are using the same topic graph.
 
-Upstream `localPlanner` initializes `goalX=0`, `goalY=0` in autonomy mode.
-The integration layer now replaces those values with NaN, so startup cannot
-plan toward the map origin.
+## 2. Startup Goalpoint suppression
 
-Upstream `pathFollower` can still retain `pathInit=true` after receiving a local
-path. The final architecture stops new global-path input from retriggering
-motion: the Go2 `global_path_receiver` holds the current body pose when the
-global path is empty or older than 2 seconds. However, the unchanged upstream
-`pathFollower` can retain the last locally planned `/path` across a
-Damping/Stand transition.
+`localPlanner` starts with `goalX/goalY = NaN` to prevent a relocalized robot
+from driving toward map origin. A valid FAR `/way_point` is required before a
+local `/path` and autonomous motion can be produced.
 
-### Current status
+Do not replace these values with zero in a launch override.
 
-Implemented:
+## 3. Legacy UnitreeSlam motion controllers
 
-- laptop owns FAR on the fixed PCD;
-- laptop sends only an ordered global path over TCP 8899;
-- Go2 has no `far_planner`;
-- only `global_path_receiver.py` publishes `/way_point`;
-- no path -> current body pose;
-- stale global path -> current body pose;
-- localPlanner initial goal is NaN.
+`dog_control_B1_one` and `go2_control_by_sdk send_cmd` must remain disabled while
+this stack is active. Only `pathFollower` may publish `/api/sport/request`.
 
-Not implemented in upstream algorithm:
+The physical remote controller remains the final takeover mechanism.
 
-- explicit clear of the retained local path on Damping/Stand transition;
-- a pathFollower-local freshness timeout independent of input topic rate.
+## 4. No live cloud is transported to the laptop
 
-### Required behavior before unattended operation
+TCP 8898 carries state, joints, paths and native FAR marker messages only. The
+uplink is display-only: state is limited to 30 Hz, joints to 20 Hz, and heavy
+Marker topics to 1 Hz. It coalesces by topic so a stalled Wi-Fi link resumes
+with current data instead of replaying stale frames. The laptop's fixed PCD is
+a visual background; the dog uses a local copy of the same file for planning.
+Real-time point-cloud upload is intentionally unsupported.
 
-Before unattended operation, verify a deployed planner revision provides:
+## 5. LIO output rate is decoupled from navigation state rate
 
-- waypoint reception and active-goal state;
-- local-path frame validation and minimum path length;
-- local-path freshness and odometry freshness handling;
-- a defined first motion request after Damping/Stand transitions;
-- bounded waypoint speed and yaw rate.
+LIO-SAM global localization runs at about 3 Hz on the Go2. The planner must not
+consume that topic directly. `nav_pose_bridge` combines it with the existing
+IMU preintegration odometry and publishes a 50 Hz map-frame state. The deskewed
+10 Hz cloud is used for LIO. The fixed-PCD replay uses the fused state to emit
+the simulator's 5 Hz planning cloud.
 
-Until those conditions are verified, do not let the robot enter locomotion mode
-while a stale local path may exist. Keep the physical remote controller available
-for takeover.
+If `/nav/state_estimation` disappears or `/stop` becomes 15, do not bypass the
+bridge; first restore global localization and high-rate IMU odometry. Use
+`./nav/audit_real_rates.sh --duration 15 --strict` to distinguish a source-rate
+problem from a bridge, static-replay, or planner-rate problem.
 
-## 2. `nav2_costmap` can crash during relocation
+## 6. `nav2_costmap` is outside this navigation loop
 
-During one relocation run, `CloudToScanForCostmap` exited with a segmentation
-fault. FAR navigation and SLAM odometry can continue, but the costmap process is
-not part of the fixed-map global-planning chain and must not be treated as a
-required node.
-
-The relocation launch must retain LIO/global localization while suppressing
-legacy motion-control/costmap processes not used by this architecture.
+Relocation must retain LIO/global localization while suppressing
+`nav2_costmap` and legacy motion-control processes. A costmap crash is not a
+failure of the FAR/localPlanner/pathFollower execution chain.

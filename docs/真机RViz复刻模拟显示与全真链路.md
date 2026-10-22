@@ -1,212 +1,88 @@
-# 真机 RViz 显示与数据来源
+# 真机 RViz 显示与狗端完整规划链路
 
-> 权威架构：[`必看.md`](../必看.md)。本文只记录最终真机显示验收。
-> 更新：2026-10-21
+> 权威文档：[`必看.md`](../必看.md)。更新：2026-10-22
 
 ## 1. 目标
 
-真机 RViz 使用：
+真机使用 `nav/far_real.rviz`，模拟对照使用 `nav/map_sim.rviz`。两者保持同一
+显示布局，Fixed Frame 为 `map`。
 
-```text
-nav/far_real.rviz
-```
-
-约束：
-
-```text
-nav/far_real.rviz 与 nav/map_sim.rviz 逐字节一致
-Fixed Frame: map
-```
-
-工具：
+RViz 工具：
 
 ```text
 MoveCamera
 2D Pose Estimate -> /initialpose
-Goalpoint -> /goal_point（电脑本地 FAR 输入）
+Goalpoint -> /goal_point
 ```
 
-## 2. 最终架构
+## 2. 数据链路
 
 ```text
-电脑：
-  固定 PCD -> pcdMapSim -> terrain -> FAR -> global_path_sender
-
 狗端：
-  Livox/LIO -> terrain -> localPlanner -> pathFollower
+  Livox/LIO -> /nav/state_estimation
+  固定导航 PCD -> static_map_replay -> terrainAnalysis -> terrainAnalysisExt
+  -> FAR -> /way_point -> localPlanner -> /path -> pathFollower
 
-显示：
-  电脑本地 FAR Marker + 电脑固定 PCD
-  狗端真实 odom/TF/joints/path/小点云
+电脑：
+  同一固定 PCD -> /overall_map（背景）
+  8898 接收狗端 odom/TF/joints/path/waypoint/FAR Marker
+  8899 下行最终 /goal_point
+  8900 下行 /initialpose
 ```
 
-电脑端必须运行：
+狗端使用固定导航 PCD 生成 0.08 m / 6 m × 6 m / 5 Hz 点云。
+电脑不运行 FAR、localPlanner 或 pathFollower，也不上传实时点云。
 
-```text
-pcdMapSim
-terrainAnalysis
-terrainAnalysisExt
-far_planner
-```
+## 3. RViz 显示源
 
-电脑端禁止运行：
-
-```text
-localPlanner
-pathFollower
-```
-
-狗端禁止运行：
-
-```text
-far_planner
-```
-
-## 3. 固定地图
-
-```text
-/home/anyacoder/go2_unitree_slam/GlobalMap_clean_20261020_1920_nav_green_edited.pcd
-```
-
-同一张 PCD 有两项用途：
-
-1. `pcdMapSim` 在电脑上生成固定地图虚拟扫描，供电脑 FAR 规划；
-2. `far_viz_receiver.py` 发布 `/overall_map`，作为 RViz 背景。
-
-狗端实时避障仍使用 Livox/terrain，不把完整固定图上传给狗。
-
-## 4. 显示数据
-
-| Display | 来源 | 说明 |
+| Display | Topic | 来源 |
 |---|---|---|
-| Go2 EDU model | `/robot_description`、狗端 `/joint_states`、真实 TF | 电脑 `robot_state_publisher` |
-| OverallMap | `/overall_map` | 电脑固定 PCD 背景 |
-| RegScan | `/registered_scan` | 电脑 `pcdMapSim` 虚拟扫描 |
-| TerrainMap | `/terrain_map` | 电脑 terrainAnalysis |
-| TerrainMapExt | `/terrain_map_ext` | 电脑 terrainAnalysisExt |
-| Go2 Live Cloud | `/go2/min_obstacle_cloud` | 狗端小点云，仅显示 |
-| Local path | `/path` | 狗端 localPlanner |
-| FAR global path | `/viz_path_topic` | 电脑本地 FAR |
-| FAR V-Graph / obstacle edges | `/viz_graph_topic` | 电脑本地 FAR |
-| Goalpoint / graph nodes | `/viz_node_topic` | 电脑本地 FAR |
-| FAR Poly | `/viz_poly_topic` | 电脑本地 FAR |
-| Boundary | `/navigation_boundary` | 电脑本地 FAR |
-| Odom arrow | `/state_estimation` | 狗端真实重定位 odom |
+| Go2 EDU model | `/robot_description`、`/joint_states`、TF | 电脑模型 + 狗端真实关节 |
+| OverallMap | `/overall_map` | 与狗端规划相同的固定 PCD |
+| Static path (pathFollower) | `/path` | 狗端 localPlanner |
+| FAR global path | `/viz_path_topic` | 狗端 FAR |
+| FAR V-Graph / obstacle edges | `/viz_graph_topic` | 狗端 FAR |
+| Goalpoint / graph nodes | `/viz_node_topic` | 狗端 FAR |
+| FAR Poly（按需开启） | `/viz_poly_topic` | 狗端 FAR |
+| Boundary | `/navigation_boundary` | 狗端 FAR |
+| Odom arrow | `/state_estimation` | 狗端重定位 |
 
-红线是电脑本地 FAR 原生 `polygon_edge`；不得自己重画。真正的障碍轮廓来自
-`/viz_poly_topic`，默认显示开关按现有 RViz 配置保持不变。
+不显示实时扫描、terrain map 或局部碰撞云。
 
-## 5. TCP 上行和下行
+## 4. TCP 契约
 
-TCP 8898 只上行：
+8898 狗端 -> 电脑：
 
 ```text
-/state_estimation
-/tf
-/tf_static
-/joint_states
-/path
-可选：狗端小点云
+/state_estimation /tf /tf_static /joint_states
+/path /way_point
+/viz_path_topic /viz_graph_topic /viz_node_topic /viz_poly_topic
+/navigation_boundary
 ```
 
-FAR Marker 不再上行；它们在电脑本地生成。
-
-TCP 8899 只下行：
+8899 电脑 -> 狗端：
 
 ```text
-电脑 FAR /viz_path_topic
-  -> ordered global path
-  -> 狗端 global_path_receiver
+仅最终 /goal_point，无路径、无速度
 ```
 
-`/way_point` 与 `/goal_point` 不跨 8898 上行。
-
-小点云限制：
+8900 电脑 -> 狗端：
 
 ```text
-约 6 m
-0.15 m 体素
-最多 12000 点
-最高 1 Hz
-仅 RViz
+/initialpose
 ```
 
-## 6. TF 与模型
-
-电脑显示 TF：
-
-```text
-world -> map
-map   -> sensor   （狗端重定位 odom 经 TCP 8898）
-sensor -> base
-base   -> vehicle
-```
-
-Go2 URDF 来自：
-
-```text
-nav/go2_model_params.yaml
-```
-
-关节动画来自狗端真实 `/joint_states`。
-
-## 7. 启动
-
-真机：
+## 5. 启动与验收
 
 ```bash
 cd ~/go2_unitree_slam
 ./nav/start_far_real.sh
-```
-
-操作：
-
-1. 使用一次 `2D Pose Estimate`。
-2. 确认 Go2 模型在固定地图上。
-3. 确认 `first SLAM odometry received`。
-4. 使用 `Goalpoint`。
-5. 观察电脑本地 FAR 路径和狗端 `/path`。
-
-独立模拟对照：
-
-```bash
-cd ~/go2_unitree_slam
-./nav/run_map_sim.sh
-```
-
-模拟只用于比较布局，不能作为真机数据源。
-
-## 8. 只读验收
-
-```bash
-cd ~/go2_unitree_slam
 ./nav/check_real_chain.sh
 ```
 
-必须确认：
+必须看到电脑端无规划器、狗端完整链路存在、`/api/sport/request` 只有
+`pathFollower` 发布，并且 FAR Marker 均由狗端唯一发布。
 
-```text
-电脑存在 /pcdMapSim /terrainAnalysis /terrainAnalysisExt /far_planner
-电脑存在 /global_path_sender /far_viz_receiver /go2_initialpose_sender
-电脑没有 /localPlanner /pathFollower
-电脑 FAR Marker 各只有一个发布者
-电脑 /way_point 没有发布者
-电脑 /far/way_point 发布者是 /far_planner
-狗端存在 terrain/localPlanner/pathFollower/global_path_receiver
-狗端没有 far_planner/far_command_link
-狗端 /way_point 唯一发布者
-狗端没有旧运动控制节点
-```
+## 6. 一句话验收
 
-日志：
-
-```text
-/tmp/go2_real_state_receiver.log
-/tmp/go2_laptop_global_planner.log
-/tmp/go2_global_path_sender.log
-/tmp/global_path_receiver.log      # 狗端
-```
-
-## 9. 一句话验收
-
-**固定 PCD、Go2 模型、真实 odom、电脑本地 FAR 输出和狗端局部路径可见；电脑没有局部执行器，狗端没有 FAR，TCP 只传小体积状态与路径。**
+**电脑只显示固定 PCD、真实 Go2 状态和狗端 FAR 的原生输出；狗端用同一固定 PCD 规划，规划与执行只发生在狗端。**
