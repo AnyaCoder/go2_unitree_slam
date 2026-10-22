@@ -69,10 +69,9 @@ class RateWindow:
 
 
 DEFAULT_SPECS = (
-    AuditSpec('/odometry/imu_incremental', 'nav_msgs/msg/Odometry', 80.0, 200.0,
-              note='LIO IMU preintegration'),
     AuditSpec('/lio_sam_ros2/mapping/re_location_odometry',
-              'nav_msgs/msg/Odometry', 1.0, 8.0, note='global correction'),
+              'nav_msgs/msg/Odometry', 1.0, 8.0,
+              note='authoritative global relocalization pose'),
     AuditSpec('/nav/state_estimation', 'nav_msgs/msg/Odometry', 45.0, 60.0,
               note='planner/controller state'),
     AuditSpec('/lio_sam_ros2/deskew/cloud_deskewed',

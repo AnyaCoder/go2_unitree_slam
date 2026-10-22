@@ -53,14 +53,20 @@ def test_dog_launch_runs_the_full_upstream_closure():
 
 def test_dog_planners_consume_only_the_fused_navigation_state():
     launch = compact('nav_dog/go2_nav.launch.py')
-    assert "HIGH_RATE_ODOM_TOPIC = '/odometry/imu_incremental'" in launch
     assert "GLOBAL_ODOM_TOPIC = '/lio_sam_ros2/mapping/re_location_odometry'" in launch
     assert "NAV_STATE_TOPIC = '/nav/state_estimation'" in launch
     assert "return [('/state_estimation', NAV_STATE_TOPIC), " in launch
     assert "('/odom_world', NAV_STATE_TOPIC)" in launch
     assert launch.count('GLOBAL_ODOM_TOPIC') == 2
-    assert "'-p', 'high_rate_topic:=' + HIGH_RATE_ODOM_TOPIC" in launch
-    assert "'-p', 'global_topic:=' + GLOBAL_ODOM_TOPIC" in launch
+    assert "'-p', 'input_topic:=' + GLOBAL_ODOM_TOPIC" in launch
+    assert 'imu_incremental' not in launch
+
+
+def test_pose_bridge_does_not_use_imu_preintegration_odometry():
+    bridge = read('nav_dog/nav_pose_bridge.py')
+    assert 'imu_incremental' not in bridge
+    assert "declare_parameter(\n            'input_topic'" in bridge
+    assert "input_timeout" in bridge
 
 
 def test_static_map_replay_is_the_default_planner_cloud_source():

@@ -3,7 +3,7 @@
 
 The Go2 owns the complete planning and execution loop:
 
-    LIO IMU odom + global correction -> nav_pose_bridge -> 50 Hz map pose
+    LIO global relocalization -> nav_pose_bridge -> 50 Hz map pose
     fixed navigation PCD -> static_map_replay -> 5 Hz rolling map terrain
                     -> terrainAnalysis -> terrainAnalysisExt
                     -> FAR -> /way_point -> localPlanner -> /path
@@ -15,8 +15,9 @@ messages over TCP 8898 and sends only the operator's final /goal_point over TCP
 
 The only deliberate upstream adaptations are:
   * LIO-SAM supplies pose and relocalization; it is not a terrain input.
-  * nav_pose_bridge propagates 3 Hz global localization at 50 Hz using the
-    existing IMU preintegration odometry.
+  * nav_pose_bridge repeats the latest relocalization pose at 50 Hz. The
+    IMU-preintegration topic drifts while the Go2 is stationary, so it must not
+    advance the navigation pose.
   * static_map_replay emits fixed-PCD rolling terrain: 0.08 m voxel,
     6 m x 6 m window, 5 Hz map-frame XYZI clouds.
   * Terrain classification uses map_sim's exact values, not the upstream
@@ -35,7 +36,6 @@ from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
-HIGH_RATE_ODOM_TOPIC = '/odometry/imu_incremental'
 GLOBAL_ODOM_TOPIC = '/lio_sam_ros2/mapping/re_location_odometry'
 NAV_STATE_TOPIC = '/nav/state_estimation'
 RAW_CLOUD_TOPIC = '/lio_sam_ros2/deskew/cloud_deskewed'
@@ -181,8 +181,7 @@ def generate_launch_description():
     pose_bridge = ExecuteProcess(
         cmd=[
             'python3', pose_bridge_script, '--ros-args',
-            '-p', 'high_rate_topic:=' + HIGH_RATE_ODOM_TOPIC,
-            '-p', 'global_topic:=' + GLOBAL_ODOM_TOPIC,
+            '-p', 'input_topic:=' + GLOBAL_ODOM_TOPIC,
             '-p', 'output_topic:=' + NAV_STATE_TOPIC,
         ],
         name='go2_nav_pose_bridge',
@@ -278,7 +277,7 @@ def generate_launch_description():
             description='真机线速度上限（m/s）'),
         DeclareLaunchArgument(
             'start_pose_bridge', default_value='true',
-            description='把高频 IMU odom 与低频全局定位融合为 50 Hz 导航状态'),
+            description='把全局重定位位姿按 50 Hz 重发给导航链'),
         DeclareLaunchArgument(
             'start_static_replay', default_value='true',
             description='用固定导航 PCD 生成 6 m x 6 m / 5 Hz 滚动点云'),
