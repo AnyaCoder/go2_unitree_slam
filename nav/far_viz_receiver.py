@@ -169,8 +169,11 @@ class FarVizReceiver(Node):
             xyz, intensity, rgb = read_pcd(map_path)
             self.static_cloud = make_cloud(
                 xyz, intensity, 'map', self.get_clock().now().to_msg(), rgb=rgb)
-            self.map_pub = self.create_publisher(PointCloud2, '/overall_map', 2)
-            self.create_timer(1.0, self.publish_map)
+            # Latch the 388k-point display map once. Re-sending it every second
+            # causes RViz/Ogre on the Go2 laptop to recreate large GL buffers.
+            self.map_pub = self.create_publisher(
+                PointCloud2, '/overall_map', static_qos)
+            self.publish_map()
             self.get_logger().info(
                 'fixed map: %d points from %s' % (len(xyz), map_path))
 

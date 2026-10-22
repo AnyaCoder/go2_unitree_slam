@@ -204,6 +204,16 @@ def test_no_live_cloud_or_motion_command_is_transported():
         assert forbidden not in topics
 
 
+def test_fixed_display_map_is_latched_once():
+    receiver = read('nav/far_viz_receiver.py')
+    rviz = read('nav/far_real.rviz')
+    assert "PointCloud2, '/overall_map', static_qos" in receiver
+    assert 'self.publish_map()' in receiver
+    assert 'create_timer(1.0, self.publish_map)' not in receiver
+    assert 'Value: /overall_map' in rviz
+    assert 'Durability Policy: Transient Local' in rviz
+
+
 def test_rviz_has_no_live_cloud_layers_and_uses_map_frame():
     import yaml
     for path in ('nav/map_sim.rviz', 'nav/far_real.rviz'):

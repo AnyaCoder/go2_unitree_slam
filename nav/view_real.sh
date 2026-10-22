@@ -47,6 +47,15 @@ if [[ -z "${XAUTHORITY:-}" ]]; then
   fi
 fi
 
+if [[ "${GO2_RVIZ_SOFTWARE:-0}" == "1" ]]; then
+  export LIBGL_ALWAYS_SOFTWARE=1
+  export GALLIUM_DRIVER=llvmpipe
+  log 'RViz 渲染：Mesa llvmpipe 软件模式'
+else
+  unset LIBGL_ALWAYS_SOFTWARE GALLIUM_DRIVER 2>/dev/null || true
+  log 'RViz 渲染：硬件 OpenGL（可设 GO2_RVIZ_SOFTWARE=1 回退）'
+fi
+
 pid_path() {
   printf '%s/%s.pid' "$RUNTIME_DIR" "$1"
 }
