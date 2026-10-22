@@ -128,8 +128,8 @@ echo '[8/8] 启动电脑端只读显示、Goalpoint 下行与 RViz'
 echo '日志：'
 echo '  狗端 UnitreeSlam: /tmp/unitree_slam_restart.log'
 echo '  狗端 go2_nav:     /tmp/go2_nav_live_restart.log'
-echo '  电脑端 RViz:      /tmp/go2_real_rviz.log'
+echo '  电脑端数据查看:   /tmp/go2_real_view/'
 echo
 echo 'RViz 打开后：先用 2D Pose Estimate 完成重定位，再点 Goalpoint。'
 echo '启动完成但未点 Goalpoint 前，狗端 localPlanner 的 goal 为 NaN，不会自主出发。'
-exec "${ROOT}/nav/run_real_view.sh"
+exec "${ROOT}/nav/view_real.sh"

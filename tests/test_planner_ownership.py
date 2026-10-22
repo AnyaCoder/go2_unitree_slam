@@ -131,29 +131,45 @@ def test_start_script_deploys_new_chain_and_rejects_legacy_owners():
 
 
 def test_goalpoint_replaces_global_path_transport():
-    view = active_lines('nav/run_real_view.sh')
+    view = active_lines('nav/view_real.sh')
     assert 'nav/goal_sender.py' in view
-    assert 'run_far_command_link.sh' in view
+    assert 'run_far_command_link.sh' not in view
     assert 'run_global_path_receiver.sh' not in view
     assert 'nav/global_path_sender.py' not in view
 
 
 def test_laptop_view_is_display_only():
-    view = active_lines('nav/run_real_view.sh')
+    view = active_lines('nav/view_real.sh')
     assert 'nav/far_viz_receiver.py' in view
     assert '--map "$MAP"' in view
-    assert '[n]av_pose_bridge.py' in view
-    assert '[s]tatic_map_replay.py' in view
-    assert '[c]loud_to_map_filter' not in view
     assert 'robot_state_publisher' in view
     assert 'rviz2 -d "$RVIZ_CONFIG"' in view
     for forbidden in (
+        r'\bssh\b',
+        r'\bscp\b',
+        r'\bpkill\b',
+        r'kill\s+-TERM',
+        r'nav_pose_bridge',
+        r'static_map_replay',
+        r'far_planner',
+        r'localPlanner',
+        r'pathFollower',
         r'ros2\s+launch\s+map_sim\s+map_sim\.launch\.py',
         r'ros2\s+launch\s+.*global_planner\.launch\.py',
-        r'executable=.localPlanner',
-        r'executable=.pathFollower',
     ):
         assert re.search(forbidden, view) is None, forbidden
+
+
+def test_view_processes_are_reused_without_stopping_services():
+    view = active_lines('nav/view_real.sh')
+    stop = active_lines('nav/stop_view.sh')
+    assert 'RUNTIME_DIR' in view and '.pid' in view
+    assert '复用 $name' in view
+    assert '接管已有 $name' in view
+    assert 'nohup' in view
+    assert 'RUNTIME_DIR' in stop
+    assert '.pid' in stop
+    assert re.search(r'\b(ssh|scp|pkill)\b', stop) is None
 
 
 def test_uplink_contains_state_and_native_far_visualization_only():

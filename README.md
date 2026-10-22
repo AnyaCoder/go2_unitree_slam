@@ -92,7 +92,8 @@ autonomous path or motion should be generated.
 ## Useful commands
 
 ```bash
-./nav/open_far_real.sh       # open another RViz window only
+./nav/view_real.sh           # attach to existing data and open RViz
+./nav/stop_view.sh           # stop only laptop-side view processes
 ./nav/check_real_chain.sh    # read-only ownership/link acceptance
 ./nav/audit_real_rates.sh    # read-only 50/5 Hz runtime audit
 ./nav/stop_real_all.sh       # stop the project's robot and laptop processes

@@ -113,7 +113,7 @@ cd ~/go2_unitree_slam
 ```text
 狗端 A：./0_unitree_slam.sh
 狗端 B：./run_nav.sh live
-电脑端 C：./nav/run_real_view.sh
+电脑端 C：./nav/view_real.sh
 ```
 
 狗端参数检查：

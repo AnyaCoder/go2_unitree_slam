@@ -2,7 +2,7 @@
 
 > **真机导航唯一启动链已变更（2026-10-21）**：导航必须按
 > `必看.md` 的“唯一启动链”执行，即狗端 `0_unitree_slam.sh` +
-> 狗端 `run_nav.sh live` + 电脑端 `run_real_view.sh`。
+> 狗端 `run_nav.sh live` + 电脑端 `nav/view_real.sh`。
 > 本文后续 `demo_mid360` / `run_demo.sh` 内容仅保留作建图操作参考，
 > 导航时不得与本链路同时启动。
 

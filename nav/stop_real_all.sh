@@ -32,7 +32,7 @@ stop_matching_local '^/autonomy_stack_go2/install/far_planner/lib/far_planner/'
 stop_matching_local '/rviz2/rviz2 .*\.rviz'
 stop_matching_local '^/opt/ros/foxy/lib/robot_state_publisher/robot_state_publisher'
 stop_matching_local '^/opt/ros/foxy/lib/tf2_ros/static_transform_publisher'
-stop_matching_local '/nav/run_real_view\.sh'
+stop_matching_local '/nav/view_real\.sh'
 
 sleep 1
 # Retry only exact project processes that ignored SIGTERM.
@@ -87,7 +87,7 @@ fi
 
 echo
 echo '--- 电脑端残留（应为空）---'
-ps -eo pid,ppid,args | grep -E 'run_real_view|pcdMapSim|far_planner|localPlanner|pathFollower|terrainAnalysis|far_viz_receiver|goal_sender|waypoint_sender|initialpose_sender|map_sim.launch|/rviz2/rviz2' | grep -v grep || true
+ps -eo pid,ppid,args | grep -E 'view_real|pcdMapSim|far_planner|localPlanner|pathFollower|terrainAnalysis|far_viz_receiver|goal_sender|waypoint_sender|initialpose_sender|map_sim.launch|/rviz2/rviz2' | grep -v grep || true
 
 echo '--- 狗端残留（应只剩 Unitree 底层，不应有本项目的导航/SLAM 节点）---'
 ssh -o ConnectTimeout=5 -o BatchMode=yes "$HOST" \
