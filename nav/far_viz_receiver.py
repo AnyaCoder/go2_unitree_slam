@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Receive Go2 state, local execution path and the optional compact cloud.
+"""Laptop-side TCP 8898 receiver for Go2 state and FAR visualization.
 
-FAR and global planning run on the laptop's fixed map. This receiver publishes
-only robot state, TF/joints, the Go2 local path and a display-only near-field
-cloud. FAR markers and /way_point remain local to their owning machines.
+Publishes the fixed PCD as /overall_map and republishes the Go2's own FAR
+markers, current path and waypoint under their native topic names. It never
+runs terrain analysis, FAR, localPlanner or pathFollower.
 """
 
 import argparse
@@ -28,7 +28,7 @@ from tf2_ros import TransformBroadcaster
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'nav_dog'))
 from far_viz_protocol import (  # noqa: E402
-    FRAME_HEADER, MAX_FRAME_BYTES, OP_CLOUD, OP_TOPIC, TOPICS, decode_cloud,
+    FRAME_HEADER, MAX_FRAME_BYTES, OP_TOPIC, TOPICS,
 )
 
 
@@ -56,11 +56,11 @@ def read_pcd(path):
             if key == 'FIELDS':
                 fields = items[1:]
             elif key == 'SIZE':
-                sizes = [int(v) for v in items[1:]]
+                sizes = [int(value) for value in items[1:]]
             elif key == 'TYPE':
                 types = items[1:]
             elif key == 'COUNT':
-                counts = [int(v) for v in items[1:]]
+                counts = [int(value) for value in items[1:]]
             elif key == 'POINTS':
                 points = int(items[1])
             elif key == 'DATA':
@@ -120,6 +120,7 @@ def make_cloud(xyz, intensity, frame_id, stamp, rgb=None):
     cloud.is_dense = True
     return cloud
 
+
 def restamp(message, stamp):
     if isinstance(message, TFMessage):
         for transform in message.transforms:
@@ -140,7 +141,7 @@ class FarVizReceiver(Node):
     def __init__(self, host, port, map_path, tf_child='sensor'):
         super().__init__('far_viz_receiver')
         self.host = host
-        self.port = port
+        self.port = int(port)
         self.closed = threading.Event()
         self.connection = None
         self.send_lock = threading.Lock()
@@ -148,7 +149,6 @@ class FarVizReceiver(Node):
         self.packet_count = 0
         self.topic_counts = [0] * len(TOPICS)
         self.state_count = 0
-        self.cloud_count = 0
         self.last_connect_error = None
         self.tf_child = tf_child
 
@@ -164,10 +164,6 @@ class FarVizReceiver(Node):
             self.topic_publishers.append(
                 self.create_publisher(spec.msg_type, spec.local_topic, qos))
         self.tf_broadcaster = TransformBroadcaster(self)
-        self.min_cloud_pub = self.create_publisher(
-            PointCloud2, '/go2/min_obstacle_cloud', 2)
-        self.added_obstacles_pub = self.create_publisher(
-            PointCloud2, '/added_obstacles', 5)
 
         if map_path:
             xyz, intensity, rgb = read_pcd(map_path)
@@ -175,8 +171,8 @@ class FarVizReceiver(Node):
                 xyz, intensity, 'map', self.get_clock().now().to_msg(), rgb=rgb)
             self.map_pub = self.create_publisher(PointCloud2, '/overall_map', 2)
             self.create_timer(1.0, self.publish_map)
-            self.get_logger().info('static map: %d points from %s' %
-                                   (len(xyz), map_path))
+            self.get_logger().info(
+                'fixed map: %d points from %s' % (len(xyz), map_path))
 
         self.create_timer(5.0, self.report_status)
         threading.Thread(target=self.receive_loop, daemon=True).start()
@@ -189,11 +185,13 @@ class FarVizReceiver(Node):
     def receive_loop(self):
         while not self.closed.is_set():
             try:
-                connection = socket.create_connection((self.host, self.port), timeout=3.0)
+                connection = socket.create_connection(
+                    (self.host, self.port), timeout=3.0)
             except OSError as error:
                 message = '%s: %s' % (type(error).__name__, error)
                 if message != self.last_connect_error:
-                    self.get_logger().warn('cannot connect to Go2 state link: %s' % message)
+                    self.get_logger().warn(
+                        'cannot connect to Go2 state link: %s' % message)
                     self.last_connect_error = message
                 self.closed.wait(2.0)
                 continue
@@ -202,8 +200,9 @@ class FarVizReceiver(Node):
             connection.settimeout(None)
             with self.send_lock:
                 self.connection = connection
-            self.get_logger().info('connected to Go2 state uplink at %s:%d' %
-                                   (self.host, self.port))
+            self.get_logger().info(
+                'connected to Go2 state uplink at %s:%d' %
+                (self.host, self.port))
             buf = bytearray()
             try:
                 while not self.closed.is_set():
@@ -223,8 +222,6 @@ class FarVizReceiver(Node):
                         del buf[:end]
                         if opcode == OP_TOPIC:
                             self.on_topic_frame(payload)
-                        elif opcode == OP_CLOUD:
-                            self.on_cloud_frame(payload)
                         else:
                             self.get_logger().warn(
                                 'ignored state frame opcode %d' % opcode)
@@ -255,25 +252,9 @@ class FarVizReceiver(Node):
         if spec.local_topic == '/state_estimation' and isinstance(message, Odometry):
             self.state_count += 1
             if self.state_count == 1:
-                self.get_logger().info('first SLAM odometry received; publishing map -> vehicle')
+                self.get_logger().info(
+                    'first SLAM odometry received; publishing map -> vehicle')
             self.publish_vehicle_tf(message)
-
-    def on_cloud_frame(self, payload):
-        try:
-            _, points = decode_cloud(payload)
-        except ValueError as error:
-            self.get_logger().warn('invalid minimal obstacle cloud: %s' % error)
-            return
-        cloud = make_cloud(
-            points, np.zeros(len(points), dtype=np.float32), 'map',
-            self.get_clock().now().to_msg())
-        self.min_cloud_pub.publish(cloud)
-        self.added_obstacles_pub.publish(cloud)
-        self.cloud_count += 1
-        if self.cloud_count == 1:
-            self.get_logger().info(
-                'first minimal obstacle cloud: %d points; '
-                'published to /go2/min_obstacle_cloud and /added_obstacles' % len(points))
 
     def publish_vehicle_tf(self, odometry):
         transform = TransformStamped()
@@ -292,11 +273,12 @@ class FarVizReceiver(Node):
             return next((self.topic_counts[i] for i, item in enumerate(TOPICS)
                          if item.local_topic == topic), 0)
         self.get_logger().info(
-            'robot=%s:%d %s packets=%d odom=%d tf=%d tf_static=%d '
-            'joints=%d path=%d cloud=%d' %
+            'robot=%s:%d %s packets=%d odom=%d joints=%d path=%d '
+            'waypoint=%d graph=%d poly=%d boundary=%d' %
             (self.host, self.port, state, self.packet_count,
-             count('/state_estimation'), count('/tf'), count('/tf_static'),
-             count('/joint_states'), count('/path'), self.cloud_count))
+             count('/state_estimation'), count('/joint_states'),
+             count('/path'), count('/way_point'), count('/viz_graph_topic'),
+             count('/viz_poly_topic'), count('/navigation_boundary')))
 
     def close(self):
         self.closed.set()

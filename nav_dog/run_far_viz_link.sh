@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Go2 state/planner-output uplink: odom, TF, joints, paths, markers and cloud.
+# Go2 uplink: odom, TF, joints, path, waypoint and native FAR visualization.
 set -euo pipefail
 set +u
 source /opt/ros/foxy/setup.bash
@@ -10,9 +10,4 @@ export LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH:-}
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 export ROS_LOCALHOST_ONLY=0
 export FAR_VIZ_PORT="${FAR_VIZ_PORT:-8898}"
-export FAR_VIZ_CLOUD_ENABLE="${FAR_VIZ_CLOUD_ENABLE:-1}"
-args=(--port "$FAR_VIZ_PORT")
-if [[ "$FAR_VIZ_CLOUD_ENABLE" == "0" ]]; then
-  args+=(--no-cloud)
-fi
-exec python3 /home/unitree/go2_nav/far_viz_link.py "${args[@]}"
+exec python3 /home/unitree/go2_nav/far_viz_link.py --port "$FAR_VIZ_PORT"
