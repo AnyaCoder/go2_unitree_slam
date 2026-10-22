@@ -23,7 +23,6 @@ usage:
       --yaml map_edit/map.yaml --out GlobalMap_edited.pcd
 """
 import argparse
-import io
 import json
 import os
 import sys

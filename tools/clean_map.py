@@ -10,8 +10,6 @@ usage:
                  [--clip-origin 0.5]
 """
 import argparse
-import struct
-import sys
 import time
 
 import numpy as np
