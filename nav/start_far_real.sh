@@ -122,6 +122,7 @@ for p in '[n]av_pose_bridge.py' '[s]tatic_map_replay.py' \
   state="$(ps -o stat= -p "$pid" | tr -d ' ')"
   [[ "$state" == T* ]] && echo "$p pid=$pid state=$state"
 done
+exit 0
 REMOTE
 )"
 if [[ -n "$stopped" ]]; then

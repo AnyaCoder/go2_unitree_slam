@@ -139,6 +139,7 @@ def test_start_script_starts_dog_view_bridges_and_checks_ports():
     assert 'wait_remote_port' in startup
     assert 'FAR_VIZ_PORT' in startup
     assert '8898' in startup or 'STATE_PORT' in startup
+    assert 'done\nexit 0\nREMOTE' in read('nav/start_far_real.sh')
 
 
 def test_goalpoint_replaces_global_path_transport():
