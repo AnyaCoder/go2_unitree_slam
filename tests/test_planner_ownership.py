@@ -172,6 +172,15 @@ def test_view_processes_are_reused_without_stopping_services():
     assert re.search(r'\b(ssh|scp|pkill)\b', stop) is None
 
 
+def test_view_fails_fast_when_dog_nav_link_is_missing():
+    view = active_lines('nav/view_real.sh')
+    startup = active_lines('nav/start_far_real.sh')
+    assert 'tcp_open "$HOST_IP" "$STATE_PORT"' in view
+    assert '狗端导航链未启动' in view
+    assert './nav/start_far_real.sh' in view
+    assert '关键进程被挂起' in startup
+
+
 def test_uplink_contains_state_and_native_far_visualization_only():
     topics = {spec.remote_topic for spec in TOPICS}
     required = {

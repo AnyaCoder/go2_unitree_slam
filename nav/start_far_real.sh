@@ -108,6 +108,25 @@ for entry in \
   fi
 done
 
+stopped="$(ssh "$HOST" 'bash -s' <<'REMOTE'
+for p in '[n]av_pose_bridge.py' '[s]tatic_map_replay.py' \
+         '[t]errainAnalysis' '[t]errainAnalysisExt' \
+         '[f]ar_planner' '[l]ocalPlanner' '[p]athFollower'; do
+  pid="$(pgrep -f "$p" | head -n 1 || true)"
+  [[ -n "$pid" ]] || continue
+  state="$(ps -o stat= -p "$pid" | tr -d ' ')"
+  [[ "$state" == T* ]] && echo "$p pid=$pid state=$state"
+done
+REMOTE
+)"
+if [[ -n "$stopped" ]]; then
+  echo "FAIL  狗端关键进程被挂起，拒绝继续：" >&2
+  echo "$stopped" >&2
+  echo '       先检查 SIGSTOP/SIGTSTP 来源，不要直接运行 RViz。' >&2
+  exit 4
+fi
+echo 'PASS  狗端关键进程均未被暂停'
+
 if ssh "$HOST" "pgrep -f '[g]lobal_path_receiver.py' >/dev/null 2>&1"; then
   echo 'FAIL  狗端仍运行旧 global_path_receiver；会形成第二套路径所有权' >&2
   exit 5

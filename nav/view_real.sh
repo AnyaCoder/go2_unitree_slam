@@ -67,6 +67,20 @@ is_running() {
   [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null
 }
 
+tcp_open() {
+  python3 - "$1" "$2" <<'PY'
+import socket
+import sys
+
+host, port = sys.argv[1], int(sys.argv[2])
+try:
+    connection = socket.create_connection((host, port), timeout=0.8)
+except OSError:
+    sys.exit(1)
+connection.close()
+PY
+}
+
 ensure_proc() {
   local name="$1" pattern="$2" log_file="$3"
   shift 3
@@ -100,6 +114,30 @@ ensure_proc() {
 
 log "只读查看模式；不会操作狗端、规划器或已有 RViz"
 log "ROS_DOMAIN_ID=$DOMAIN_ID  map=$MAP"
+
+log "检查狗端状态通道 $HOST_IP:$STATE_PORT"
+state_ready=0
+for attempt in $(seq 1 20); do
+  if tcp_open "$HOST_IP" "$STATE_PORT"; then
+    state_ready=1
+    break
+  fi
+  (( attempt == 10 )) && log '仍在等待狗端 8898……'
+  sleep 0.5
+done
+if [[ "$state_ready" -ne 1 ]]; then
+  log "FAIL 狗端导航链未启动：$HOST_IP:$STATE_PORT 无法连接"
+  log '请先运行 ./nav/start_far_real.sh；view_real.sh 只负责查看，不会拉起狗端'
+  exit 4
+fi
+log 'PASS 狗端状态通道已就绪'
+
+if ! tcp_open "$HOST_IP" "$COMMAND_PORT"; then
+  log "WARN Goalpoint 通道 $HOST_IP:$COMMAND_PORT 未就绪；请检查狗端 far_command_link"
+fi
+if ! tcp_open "$HOST_IP" "$INITIALPOSE_PORT"; then
+  log "WARN InitialPose 通道 $HOST_IP:$INITIALPOSE_PORT 未就绪；请检查狗端 initialpose_link"
+fi
 
 ensure_proc \
   far_viz_receiver '^python3 .*/nav/far_viz_receiver\.py' \
